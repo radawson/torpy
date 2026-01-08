@@ -101,6 +101,34 @@ class TorCellEmpty(TorCell):
         return {'data': payload}
 
 
+class CellUnknown(TorCell):
+    """
+    Generic handler for unknown cell types.
+    Used to gracefully handle newer TOR protocol features that aren't yet implemented.
+    """
+    NUM = -1  # Will be set dynamically
+
+    def __init__(self, cell_num=-1, circuit_id=0, payload=b''):
+        super().__init__(circuit_id)
+        self.cell_num = cell_num
+        self.payload = payload
+
+    def _serialize_payload(self):
+        return self.payload
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        return {'cell_num': -1, 'payload': payload}
+
+    def _args_str(self):
+        return 'cell_num = {}, payload_len = {}'.format(self.cell_num, len(self.payload))
+
+    def __repr__(self):
+        return 'CellUnknown(cell_num={}, circuit_id={:x}, payload_len={})'.format(
+            self.cell_num, self.circuit_id, len(self.payload)
+        )
+
+
 class CellVersions(TorCell):
     """The payload in a VERSIONS cell is a series of big-endian two-byte integers."""
 
@@ -843,7 +871,15 @@ class TorCommands:
     def get_by_num(cls, num):
         cell_type = cls._map.get(num, None)
         if not cell_type:
-            raise Exception('Cell type ({}) not found'.format(num))
+            # Unknown cell type - return a generic handler instead of raising exception
+            # This allows torpy to work with newer TOR protocol versions that have
+            # cell types not yet implemented in torpy
+            logger.warning('Unknown cell type (%d) received. Using generic handler. '
+                          'This may be a newer TOR protocol feature not yet implemented in torpy.', num)
+            # Create a dynamic class for this unknown cell type
+            class UnknownCellType(CellUnknown):
+                NUM = num
+            return UnknownCellType
         return cell_type
 
     # The relay commands.

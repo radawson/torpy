@@ -274,8 +274,13 @@ class TorHandshake:
         self.tor_socket.send_cell(CellVersions(self.tor_protocol.SUPPORTED_VERSION))
 
     def _retrieve_versions(self):
-        cell = self.tor_socket.recv_cell()
-        assert isinstance(cell, CellVersions)
+        # Skip unknown cells until we get VERSIONS cell
+        while True:
+            cell = self.tor_socket.recv_cell()
+            if isinstance(cell, CellVersions):
+                break
+            # Skip unknown cells (e.g., newer protocol features)
+            logger.debug('Skipping non-VERSIONS cell: %s', type(cell).__name__)
 
         logger.debug('Remote protocol versions: %s', cell.versions)
         # Choose maximum supported by both
@@ -283,19 +288,30 @@ class TorHandshake:
 
     def _retrieve_certs(self):
         logger.debug('Retrieving CERTS cell...')
-        cell_certs = self.tor_socket.recv_cell()
-
-        assert isinstance(cell_certs, CellCerts)
+        # Skip unknown cells until we get CERTS cell
+        while True:
+            cell_certs = self.tor_socket.recv_cell()
+            if isinstance(cell_certs, CellCerts):
+                break
+            logger.debug('Skipping non-CERTS cell: %s', type(cell_certs).__name__)
         # TODO: check certs validity
 
         logger.debug('Retrieving AUTH_CHALLENGE cell...')
-        cell_auth = self.tor_socket.recv_cell()
-        assert isinstance(cell_auth, CellAuthChallenge)
+        # Skip unknown cells until we get AUTH_CHALLENGE cell
+        while True:
+            cell_auth = self.tor_socket.recv_cell()
+            if isinstance(cell_auth, CellAuthChallenge):
+                break
+            logger.debug('Skipping non-AUTH_CHALLENGE cell: %s', type(cell_auth).__name__)
 
     def _retrieve_net_info(self):
         logger.debug('Retrieving NET_INFO cell...')
-        cell = self.tor_socket.recv_cell()
-        assert isinstance(cell, CellNetInfo)
+        # Skip unknown cells until we get NET_INFO cell
+        while True:
+            cell = self.tor_socket.recv_cell()
+            if isinstance(cell, CellNetInfo):
+                break
+            logger.debug('Skipping non-NET_INFO cell: %s', type(cell).__name__)
         logger.debug('Our public IP address: %s', cell.this_or)
 
     def _send_net_info(self):
