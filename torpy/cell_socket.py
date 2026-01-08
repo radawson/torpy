@@ -21,7 +21,10 @@ import struct
 import logging
 import threading
 
-from torpy.cells import TorCell, CellCerts, CellNetInfo, TorCommands, CellVersions, CellAuthChallenge
+from torpy.cells import (
+    TorCell, CellCerts, CellNetInfo, TorCommands, CellVersions,
+    CellAuthChallenge, CellPaddingNegotiate
+)
 from torpy.utils import coro_recv_exact
 
 logger = logging.getLogger(__name__)
@@ -192,7 +195,7 @@ class NoDataException(Exception):
 
 class TorProtocol:
     DEFAULT_VERSION = 3
-    SUPPORTED_VERSION = [3, 4]
+    SUPPORTED_VERSION = [3, 4, 5]  # Link protocol 5 adds padding negotiation support
 
     def __init__(self, version=DEFAULT_VERSION):
         self._version = version
@@ -256,6 +259,11 @@ class TorHandshake:
         self._retrieve_net_info()
         self._send_net_info()
 
+        # Link protocol 5 adds support for link padding negotiation
+        # See padding-spec.txt for details
+        if self.tor_protocol.version >= 5:
+            self._negotiate_padding()
+
     def _send_versions(self):
         """
         Send CellVersion.
@@ -318,3 +326,29 @@ class TorHandshake:
         """If version 2 or higher is negotiated, each party sends the other a NETINFO cell."""
         logger.debug('Sending NET_INFO cell...')
         self.tor_socket.send_cell(CellNetInfo(int(time.time()), self.tor_socket.ip_address, '0'))
+
+    def _negotiate_padding(self):
+        """
+        Negotiate link padding for protocol version 5+.
+
+        Link protocol 5 adds support for link padding and negotiation.
+        Clients can send PADDING_NEGOTIATE cells to enable/disable padding.
+
+        By default, we disable link padding for performance (clients typically
+        don't need it). Relays may still send PADDING_NEGOTIATE or VPADDING cells
+        which we will accept and ignore.
+
+        See padding-spec.txt section 2. "Link-level padding"
+        """
+        logger.debug('Negotiating link padding (protocol v5)...')
+        # Send PADDING_NEGOTIATE with STOP command to disable padding
+        # This reduces bandwidth overhead for the connection
+        # version=0, command=PADDING_STOP(0), ito_low=0, ito_high=0
+        padding_cell = CellPaddingNegotiate(
+            version=0,
+            command=CellPaddingNegotiate.PADDING_STOP,
+            ito_low_ms=0,
+            ito_high_ms=0
+        )
+        self.tor_socket.send_cell(padding_cell)
+        logger.debug('Sent PADDING_NEGOTIATE(STOP) to disable link padding')

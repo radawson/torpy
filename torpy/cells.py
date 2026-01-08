@@ -836,6 +836,158 @@ class CellAuthChallenge(TorCell):
         return {'auth': payload}
 
 
+class CellCreated(TorCell):
+    """
+    CellCreated representation (NUM=2).
+    
+    Response to a CREATE cell using the TAP handshake.
+    A CREATED cell contains:
+        DH_DATA (Server's DH public key)  [DH_LEN bytes]
+        KH      (Derivative key data)     [HASH_LEN bytes]
+    
+    tor-spec.txt 5.1.3. "The "TAP" handshake"
+    """
+    NUM = 2
+
+    def __init__(self, handshake_data, circuit_id=0):
+        super().__init__(circuit_id)
+        self.handshake_data = handshake_data
+
+    def _serialize_payload(self):
+        return self.handshake_data
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        # DH_DATA is DH_LEN (128) bytes, KH is HASH_LEN (20) bytes
+        return {'handshake_data': payload[:148]}
+
+    def _args_str(self):
+        return 'handshake_data_len = {}'.format(len(self.handshake_data))
+
+
+class CellPaddingNegotiate(TorCell):
+    """
+    CellPaddingNegotiate representation (NUM=12).
+    
+    Link protocol 5 padding negotiation cell.
+    A PADDING_NEGOTIATE cell contains:
+        version   (Negotiation version)   [1 byte]
+        command   (Command type)          [1 byte]
+        ito_low   (Low timeout in ms)     [2 bytes]
+        ito_high  (High timeout in ms)    [2 bytes]
+    
+    Commands:
+        0 - STOP: Stop sending link padding
+        1 - START: Start/adjust link padding parameters
+    
+    padding-spec.txt 2. "Link-level padding"
+    """
+    NUM = 12
+
+    # Padding negotiate commands
+    PADDING_STOP = 0
+    PADDING_START = 1
+
+    def __init__(self, version=0, command=0, ito_low_ms=0, ito_high_ms=0, circuit_id=0):
+        super().__init__(circuit_id)
+        self.version = version
+        self.command = command
+        self.ito_low_ms = ito_low_ms
+        self.ito_high_ms = ito_high_ms
+
+    def _serialize_payload(self):
+        return struct.pack('!BBHH', self.version, self.command, self.ito_low_ms, self.ito_high_ms)
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        if len(payload) >= 6:
+            version, command, ito_low_ms, ito_high_ms = struct.unpack('!BBHH', payload[:6])
+            return {
+                'version': version,
+                'command': command,
+                'ito_low_ms': ito_low_ms,
+                'ito_high_ms': ito_high_ms
+            }
+        return {'version': 0, 'command': 0, 'ito_low_ms': 0, 'ito_high_ms': 0}
+
+    def _args_str(self):
+        cmd_str = 'STOP' if self.command == 0 else 'START'
+        return 'version = {}, command = {}, ito_low = {}ms, ito_high = {}ms'.format(
+            self.version, cmd_str, self.ito_low_ms, self.ito_high_ms
+        )
+
+
+class CellVPadding(TorCell):
+    """
+    CellVPadding representation (NUM=128).
+    
+    Variable-length padding cell. Used for link-level padding to
+    obscure traffic patterns. The payload is random data.
+    
+    tor-spec.txt 7.2. "Link-level padding"
+    """
+    NUM = 128
+
+    def __init__(self, padding_data=b'', circuit_id=0):
+        super().__init__(circuit_id)
+        self.padding_data = padding_data
+
+    def _serialize_payload(self):
+        return self.padding_data
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        return {'padding_data': payload}
+
+    def _args_str(self):
+        return 'padding_len = {}'.format(len(self.padding_data))
+
+
+class CellAuthenticate(TorCell):
+    """
+    CellAuthenticate representation (NUM=131).
+    
+    Optional authentication cell sent by initiator.
+    A AUTHENTICATE cell contains:
+        AuthType  (Authentication type)   [2 bytes]
+        AuthLen   (Length of auth data)   [2 bytes]
+        Auth      (Authentication data)   [AuthLen bytes]
+    
+    tor-spec.txt 4.4. "AUTHENTICATE cells"
+    """
+    NUM = 131
+
+    def __init__(self, auth_type=0, auth_data=b'', circuit_id=0):
+        super().__init__(circuit_id)
+        self.auth_type = auth_type
+        self.auth_data = auth_data
+
+    def _serialize_payload(self):
+        return struct.pack('!HH', self.auth_type, len(self.auth_data)) + self.auth_data
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        if len(payload) >= 4:
+            auth_type, auth_len = struct.unpack('!HH', payload[:4])
+            auth_data = payload[4:4 + auth_len]
+            return {'auth_type': auth_type, 'auth_data': auth_data}
+        return {'auth_type': 0, 'auth_data': b''}
+
+    def _args_str(self):
+        return 'auth_type = {}, auth_len = {}'.format(self.auth_type, len(self.auth_data))
+
+
+class CellAuthorize(TorCellEmpty):
+    """
+    CellAuthorize representation (NUM=132).
+    
+    Reserved for future use. Currently not used in the TOR protocol.
+    
+    tor-spec.txt 3. "Cell Packet format"
+    """
+    NUM = 132
+
+
 class TorCommands:
     """
     Enum class which contains all available command types.
@@ -848,7 +1000,7 @@ class TorCommands:
         # Fixed-length command values.
         CellPadding.NUM: CellPadding,               # 0
         CellCreate.NUM: CellCreate,                 # 1
-        # CellCreated.NUM: CellCreated,               # 2
+        CellCreated.NUM: CellCreated,               # 2
         CellRelay.NUM: CellRelay,                   # 3
         CellDestroy.NUM: CellDestroy,               # 4
         CellCreateFast.NUM: CellCreateFast,         # 5
@@ -857,13 +1009,15 @@ class TorCommands:
         CellRelayEarly.NUM: CellRelayEarly,         # 9
         CellCreate2.NUM: CellCreate2,               # 10
         CellCreated2.NUM: CellCreated2,             # 11
+        CellPaddingNegotiate.NUM: CellPaddingNegotiate,  # 12 (Link protocol 5)
 
         # Variable-length command values.
         CellVersions.NUM: CellVersions,             # 7
-        # CellVPadding.NUM: CellVPadding,            # 128
+        CellVPadding.NUM: CellVPadding,             # 128
         CellCerts.NUM: CellCerts,                   # 129
         CellAuthChallenge.NUM: CellAuthChallenge,   # 130
-        # CellAuthenticate.NUM: CellAuthenticate,    # 131
+        CellAuthenticate.NUM: CellAuthenticate,     # 131
+        CellAuthorize.NUM: CellAuthorize,           # 132
         # fmt: on
     }
 

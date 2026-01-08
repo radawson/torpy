@@ -6,11 +6,14 @@ Torpy can be used to communicate with clearnet hosts or hidden services through 
 
 **Features**
 - No Stem or official Tor client required
+- Python 3.6 - 3.12 compatible
+- Support TOR Link Protocol versions 3, 4, and 5
 - Support v2 hidden services ([v2 specification](https://gitweb.torproject.org/torspec.git/tree/rend-spec-v2.txt))
 - Support *Basic* and *Stealth* authorization protocol
 - Provide simple [TorHttpAdapter](https://github.com/torpyorg/torpy/blob/master/torpy/http/adapter.py) for [requests](https://requests.readthedocs.io/) library
 - Provide simple urllib [tor_opener](https://github.com/torpyorg/torpy/blob/master/torpy/http/urlopener.py) for making requests without any dependencies
 - Provide simple Socks5 proxy
+- Graceful handling of unknown cell types for forward compatibility
 
 **Donation**
 
@@ -163,6 +166,33 @@ TODO
 - [ ] Rewrite the library using asyncio
 - [ ] Implement onion services
 
+Supported Cell Types
+--------------------
+torpy implements the following TOR cell types per the [TOR specification](https://spec.torproject.org/):
+
+| Cell Type | NUM | Description |
+|-----------|-----|-------------|
+| PADDING | 0 | Keep-alive padding |
+| CREATE | 1 | Create circuit (TAP handshake) |
+| CREATED | 2 | Circuit created response |
+| RELAY | 3 | Relay data |
+| DESTROY | 4 | Destroy circuit |
+| CREATE_FAST | 5 | Fast circuit creation |
+| CREATED_FAST | 6 | Fast circuit response |
+| VERSIONS | 7 | Protocol version negotiation |
+| NETINFO | 8 | Network information |
+| RELAY_EARLY | 9 | Early relay cell |
+| CREATE2 | 10 | Create circuit (ntor handshake) |
+| CREATED2 | 11 | Circuit created response |
+| PADDING_NEGOTIATE | 12 | Link padding negotiation (v5) |
+| VPADDING | 128 | Variable-length padding |
+| CERTS | 129 | Certificates |
+| AUTH_CHALLENGE | 130 | Authentication challenge |
+| AUTHENTICATE | 131 | Authentication response |
+| AUTHORIZE | 132 | Reserved for future use |
+
+Unknown cell types are handled gracefully, allowing torpy to work with newer TOR protocol versions.
+
 
 License
 -------
@@ -172,11 +202,16 @@ Licensed under the Apache License, Version 2.0
 References
 ----------
 - Official [Tor](https://gitweb.torproject.org/tor.git/) client
+- [TOR Protocol Specifications](https://spec.torproject.org/)
 - [Pycepa](https://github.com/pycepa/pycepa)
 - [TorPylle](https://github.com/cea-sec/TorPylle)
 - [TinyTor](https://github.com/Marten4n6/TinyTor)
 - C++ Windows only implementation [Mini-tor](https://github.com/wbenny/mini-tor)
 - Nice Java implementation [Orchid](https://github.com/subgraph/Orchid)
+
+Changelog
+---------
+See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
 
 
 [Python Versions]:      https://img.shields.io/badge/python-3.6,%203.7,%203.8,%203.9,%203.10,%203.11,%203.12-blue.svg
