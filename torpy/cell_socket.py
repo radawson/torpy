@@ -58,9 +58,12 @@ class TorCellSocket:
         # Create SSL context compatible with Python 3.6+ and Python 3.12+
         # Python 3.12 removed ssl.wrap_socket(), so we use SSLContext approach
         # This ensures compatibility with current TOR specifications requiring TLS 1.2+
+        # Note: We disable hostname checking since TOR connections use IP addresses
         if sys.version_info >= (3, 7):
             # Python 3.7+ supports TLSVersion enum
             context = ssl.create_default_context()
+            context.check_hostname = False  # TOR uses IP addresses, not hostnames
+            context.verify_mode = ssl.CERT_NONE  # TOR uses self-signed certificates
             if hasattr(ssl, 'TLSVersion'):
                 context.minimum_version = ssl.TLSVersion.TLSv1_2
         elif sys.version_info >= (3, 6):
@@ -68,12 +71,16 @@ class TorCellSocket:
             # Disable older protocols to ensure TLS 1.2+ only
             try:
                 context = ssl.create_default_context()
+                context.check_hostname = False  # TOR uses IP addresses, not hostnames
+                context.verify_mode = ssl.CERT_NONE  # TOR uses self-signed certificates
             except AttributeError:
                 # Fallback if create_default_context not available
                 if hasattr(ssl, 'PROTOCOL_TLS'):
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS)
                 else:
                     context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
             # Explicitly disable older protocols to enforce TLS 1.2+
             context.options |= ssl.OP_NO_SSLv2
             context.options |= ssl.OP_NO_SSLv3
@@ -82,16 +89,19 @@ class TorCellSocket:
         else:
             # Fallback for older versions (though torpy requires Python 3.6+)
             context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
 
         # Create socket and wrap with SSL context
+        # Connect first, then wrap (required for Python 3.12+)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._socket = context.wrap_socket(sock)
+        sock.settimeout(15.0)
+        sock.connect((self._router.ip, self._router.or_port))
+        self._socket = context.wrap_socket(sock, server_hostname=None)
         
         logger.debug('Connecting socket to %s relay...', self._router)
         try:
-            self._socket.settimeout(15.0)
-            self._socket.connect((self._router.ip, self._router.or_port))
-
+            # Socket is already connected and wrapped above
             handshake = TorHandshake(self, self._protocol)
             handshake.initiate()
         except Exception as e:
