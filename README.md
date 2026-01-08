@@ -8,6 +8,7 @@ Torpy can be used to communicate with clearnet hosts or hidden services through 
 - No Stem or official Tor client required
 - Python 3.6 - 3.12 compatible
 - Support TOR Link Protocol versions 3, 4, and 5
+- **NEW: Support v3 hidden services** (56-character .onion addresses) per [rend-spec-v3](https://gitlab.torproject.org/tpo/core/torspec/-/blob/main/spec/rend-spec-v3.md)
 - Support v2 hidden services ([v2 specification](https://gitweb.torproject.org/torspec.git/tree/rend-spec-v2.txt))
 - Support *Basic* and *Stealth* authorization protocol
 - Provide simple [TorHttpAdapter](https://github.com/torpyorg/torpy/blob/master/torpy/http/adapter.py) for [requests](https://requests.readthedocs.io/) library
@@ -160,11 +161,11 @@ Contribute
 
 TODO
 ----
-- [ ] Implement v3 hidden services [specification](https://gitweb.torproject.org/torspec.git/tree/rend-spec-v3.txt)
+- [x] ~~Implement v3 hidden services~~ **DONE!** (see [rend-spec-v3](https://gitlab.torproject.org/tpo/core/torspec/-/blob/main/spec/rend-spec-v3.md))
 - [ ] Refactor Tor cells serialization/deserialization
-- [ ] More unit tests
+- [x] ~~More unit tests~~ **Added 80+ tests for cells and v3 hidden services**
 - [ ] Rewrite the library using asyncio
-- [ ] Implement onion services
+- [ ] Implement onion services (server-side)
 
 Supported Cell Types
 --------------------

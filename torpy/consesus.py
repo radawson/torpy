@@ -1,4 +1,5 @@
 # Copyright 2019 James Brown
+# Copyright 2025 Richard Dawson
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,7 +30,7 @@ from torpy.documents import TorDocumentsFactory
 from torpy.guard import TorGuard
 from torpy.parsers import RouterDescriptorParser
 from torpy.cache_storage import TorCacheDirStorage
-from torpy.crypto_common import rsa_verify, rsa_load_der
+from torpy.crypto_common import rsa_verify, rsa_load_der, sha3_256
 from torpy.documents.network_status import RouterFlags, NetworkStatusDocument, FetchDescriptorError, Router
 from torpy.documents.dir_key_certificate import DirKeyCertificateList
 from torpy.documents.network_status_diff import NetworkStatusDiffDocument
@@ -437,7 +438,7 @@ class TorConsensus:
 
     def get_responsibles(self, hidden_service):
         """
-        Get responsible dir for hidden service specified.
+        Get responsible dir for hidden service specified (v2).
 
         :param hidden_service:
         :return:
@@ -453,3 +454,90 @@ class TorConsensus:
                         idx = (i + 1 + j) % len(hsdir_router_list)
                         yield hsdir_router_list[idx]
                     break
+
+    def get_responsibles_v3(self, blinded_pubkey: bytes, time_period_num: int,
+                            shared_random_value: bytes = None, spread: int = 4):
+        """
+        Get responsible HSDirs for a v3 hidden service.
+
+        Per rend-spec-v3 section 2.2.3:
+        For each replica (0 and 1), compute the HSDir index and find
+        the responsible directories.
+
+        Args:
+            blinded_pubkey: 32-byte blinded public key
+            time_period_num: Current time period number
+            shared_random_value: SRV from consensus (optional)
+            spread: Number of HSDirs per replica (default 4)
+
+        Yields:
+            Tuple of (router, replica) for each responsible HSDir
+        """
+        import struct
+
+        hsdir_router_list = self.get_hsdirs()
+        if not hsdir_router_list:
+            logger.warning("No HSDirs available in consensus")
+            return
+
+        # Build sorted list of (hs_index, router) pairs
+        # For v3, HSDirs are sorted by their hs_index computed as:
+        # hs_index = H("node-idx" | node_id | shared_random_value | INT_8(period) | INT_8(period_length))
+
+        TIME_PERIOD_LENGTH = 1440 * 60  # 24 hours in seconds
+
+        # Use placeholder SRV if not provided
+        if shared_random_value is None:
+            # In production, this should come from the consensus
+            # For now, use a deterministic placeholder
+            shared_random_value = sha3_256(b"shared-random-placeholder")
+
+        # Compute node indices for all HSDirs
+        indexed_routers = []
+        for router in hsdir_router_list:
+            # node_id is the router's identity (fingerprint)
+            node_id = router.fingerprint
+            if isinstance(node_id, str):
+                node_id = bytes.fromhex(node_id)
+
+            # Compute hs_index for this node
+            index_input = (
+                b"node-idx" +
+                node_id +
+                shared_random_value +
+                struct.pack(">Q", time_period_num) +
+                struct.pack(">Q", TIME_PERIOD_LENGTH)
+            )
+            hs_index = sha3_256(index_input)
+            indexed_routers.append((hs_index, router))
+
+        # Sort by hs_index
+        indexed_routers.sort(key=lambda x: x[0])
+
+        # For each replica, compute the store-at-idx and find responsible HSDirs
+        for replica in range(2):
+            # Compute hs_index for the service at this replica
+            index_input = (
+                b"store-at-idx" +
+                blinded_pubkey +
+                struct.pack(">Q", replica) +
+                struct.pack(">Q", TIME_PERIOD_LENGTH) +
+                struct.pack(">Q", time_period_num)
+            )
+            service_index = sha3_256(index_input)
+
+            # Find the position in the ring where this index falls
+            pos = 0
+            for i, (hs_index, _) in enumerate(indexed_routers):
+                if hs_index >= service_index:
+                    pos = i
+                    break
+            else:
+                # Wrap around to the beginning
+                pos = 0
+
+            # Yield 'spread' HSDirs starting from this position
+            for j in range(spread):
+                idx = (pos + j) % len(indexed_routers)
+                _, router = indexed_routers[idx]
+                yield router, replica

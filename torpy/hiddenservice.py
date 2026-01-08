@@ -1,4 +1,5 @@
 # Copyright 2019 James Brown
+# Copyright 2025 Richard Dawson
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,12 +19,26 @@ import time
 import struct
 import logging
 from base64 import b32decode, b32encode
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from torpy.cells import CellRelayRendezvous2
 from torpy.utils import AuthType
 from torpy.parsers import IntroPointParser, HSDescriptorParser
 from torpy.crypto_common import sha1, aes_update, aes_ctr_decryptor, b64decode, curve25519_public_from_bytes
+
+# V3 hidden service support
+from torpy.hs_ntor import (
+    get_time_period_num,
+    derive_blinded_pubkey,
+    build_subcredential,
+    verify_hs_address,
+    HSNtorHandshake,
+)
+from torpy.hs_descriptor import (
+    decrypt_v3_descriptor,
+    parse_link_specifiers,
+    V3HSDescriptor,
+)
 
 if TYPE_CHECKING:
     from torpy.circuit import TorCircuit
@@ -57,17 +72,49 @@ class HiddenService:
 
     HS_NO_AUTH = (None, AuthType.No)
 
-    def __init__(self, onion_address, descriptor_cookie=None, auth_type=AuthType.No):
+    def __init__(self, onion_address, descriptor_cookie=None, auth_type=AuthType.No,
+                 client_auth_key: Optional[bytes] = None):
+        """
+        Initialize a hidden service connection.
+        
+        Args:
+            onion_address: The .onion address (v2 or v3)
+            descriptor_cookie: V2 descriptor cookie for authorization
+            auth_type: V2 authorization type (Basic or Stealth)
+            client_auth_key: V3 client authorization key (x25519 private key)
+        """
         self._onion_address, self._permanent_id, onion_identity_pk = self.parse_onion(onion_address)
-        self._onion_identity_pk = curve25519_public_from_bytes(onion_identity_pk) if onion_identity_pk else None
-        if self._onion_identity_pk:
-            raise Exception('v3 onion hidden service not supported yet')
+        
+        # Detect v2 vs v3
+        if onion_identity_pk is not None:
+            # V3 hidden service (56-character address)
+            self._version = 3
+            self._identity_pubkey = onion_identity_pk  # Ed25519 public key
+            self._onion_identity_pk = None  # Not used for v3
+            self._client_auth_key = client_auth_key
+            
+            # Verify the address checksum
+            is_valid, _ = verify_hs_address(self._onion_address)
+            if not is_valid:
+                raise ValueError(f'Invalid v3 onion address checksum: {onion_address}')
+            
+            logger.info('Initialized v3 hidden service: %s', self._onion_address[:16] + '...')
+        else:
+            # V2 hidden service (16-character address)
+            self._version = 2
+            self._identity_pubkey = None
+            self._onion_identity_pk = None
+            self._client_auth_key = None
+        
         self._descriptor_cookie = b64decode(descriptor_cookie) if descriptor_cookie else None
         self._auth_type = auth_type
-        if descriptor_cookie and auth_type == AuthType.No:
-            raise RuntimeError('You must specify auth type')
-        if not descriptor_cookie and auth_type != AuthType.No:
-            raise RuntimeError('You must specify descriptor cookie')
+        
+        # V2-specific auth validation
+        if self._version == 2:
+            if descriptor_cookie and auth_type == AuthType.No:
+                raise RuntimeError('You must specify auth type')
+            if not descriptor_cookie and auth_type != AuthType.No:
+                raise RuntimeError('You must specify descriptor cookie')
 
     @staticmethod
     def normalize_onion(onion_address):
@@ -119,6 +166,101 @@ class HiddenService:
     @property
     def auth_type(self):
         return self._auth_type
+
+    @property
+    def version(self):
+        """Return the hidden service version (2 or 3)."""
+        return self._version
+
+    @property
+    def identity_pubkey(self):
+        """Return the Ed25519 identity public key (v3 only)."""
+        return self._identity_pubkey
+
+    @property
+    def is_v3(self):
+        """Return True if this is a v3 hidden service."""
+        return self._version == 3
+
+    # =========================================================================
+    # V3 Hidden Service Methods
+    # =========================================================================
+
+    def get_blinded_pubkey(self, time_period_num: Optional[int] = None) -> bytes:
+        """
+        Get the blinded public key for v3 descriptor lookup.
+        
+        Args:
+            time_period_num: Time period number (defaults to current)
+            
+        Returns:
+            32-byte blinded public key
+        """
+        if self._version != 3:
+            raise RuntimeError('get_blinded_pubkey only available for v3 hidden services')
+        
+        if time_period_num is None:
+            time_period_num = get_time_period_num()
+        
+        return derive_blinded_pubkey(self._identity_pubkey, time_period_num)
+
+    def get_subcredential(self, time_period_num: Optional[int] = None) -> bytes:
+        """
+        Get the subcredential for v3 descriptor decryption.
+        
+        Args:
+            time_period_num: Time period number (defaults to current)
+            
+        Returns:
+            32-byte subcredential
+        """
+        if self._version != 3:
+            raise RuntimeError('get_subcredential only available for v3 hidden services')
+        
+        if time_period_num is None:
+            time_period_num = get_time_period_num()
+        
+        blinded_pubkey = self.get_blinded_pubkey(time_period_num)
+        return build_subcredential(self._identity_pubkey, blinded_pubkey)
+
+    def get_descriptor_id_v3(self, replica: int = 0, 
+                              time_period_num: Optional[int] = None) -> bytes:
+        """
+        Get the v3 descriptor ID for HSDir lookup.
+        
+        Args:
+            replica: Replica number (0 or 1)
+            time_period_num: Time period number (defaults to current)
+            
+        Returns:
+            32-byte descriptor ID
+        """
+        if self._version != 3:
+            raise RuntimeError('get_descriptor_id_v3 only available for v3 hidden services')
+        
+        if time_period_num is None:
+            time_period_num = get_time_period_num()
+        
+        blinded_pubkey = self.get_blinded_pubkey(time_period_num)
+        
+        # Descriptor ID is derived from blinded key
+        from torpy.crypto_common import sha3_256
+        import struct
+        
+        TIME_PERIOD_LENGTH = 1440 * 60
+        desc_id_input = (
+            b"store-at-idx" +
+            blinded_pubkey +
+            struct.pack(">Q", replica) +
+            struct.pack(">Q", TIME_PERIOD_LENGTH) +
+            struct.pack(">Q", time_period_num)
+        )
+        
+        return sha3_256(desc_id_input)
+
+    # =========================================================================
+    # V2 Hidden Service Methods
+    # =========================================================================
 
     def _get_secret_id(self, replica):
         """

@@ -1,4 +1,5 @@
 # Copyright 2019 James Brown
+# Copyright 2025 Richard Dawson
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -802,6 +803,185 @@ class CellRelayRendezvousEstablished(TorCellEmpty):
 
 class CellRelayIntroduceAck(TorCellEmpty):
     NUM = 40
+
+
+class CellRelayIntroduce1V3(TorCell):
+    """
+    V3 Hidden Service INTRODUCE1 cell.
+    
+    Per rend-spec-v3 section 3.2:
+    The INTRODUCE1 cell for v3 hidden services contains:
+    - AUTH_KEY_TYPE (1 byte): Type of authentication key (02 = ed25519)
+    - AUTH_KEY (variable): Authentication key
+    - N_EXTENSIONS (1 byte): Number of extensions
+    - Extensions (variable): Extension data
+    - Encrypted payload containing rendezvous info
+    
+    This cell is sent from client to introduction point.
+    """
+    NUM = 34  # Same as v2, but different format
+
+    AUTH_KEY_TYPE_ED25519 = 2
+
+    def __init__(self, legacy_key_id: bytes, auth_key: bytes, 
+                 encrypted_data: bytes, extensions: list = None,
+                 circuit_id: int = 0):
+        """
+        Create a v3 INTRODUCE1 cell.
+        
+        Args:
+            legacy_key_id: 20-byte legacy key ID (for intro point identification)
+            auth_key: 32-byte Ed25519 authentication key
+            encrypted_data: Encrypted introduction data
+            extensions: Optional list of extensions
+            circuit_id: Circuit ID
+        """
+        super().__init__(circuit_id)
+        self.legacy_key_id = legacy_key_id
+        self.auth_key = auth_key
+        self.encrypted_data = encrypted_data
+        self.extensions = extensions or []
+
+    def _serialize_payload(self):
+        # Legacy key ID for intro point identification
+        payload = struct.pack('!20s', self.legacy_key_id)
+        
+        # Auth key type and key
+        payload += struct.pack('!BH', self.AUTH_KEY_TYPE_ED25519, len(self.auth_key))
+        payload += self.auth_key
+        
+        # Extensions
+        payload += struct.pack('!B', len(self.extensions))
+        for ext in self.extensions:
+            ext_type, ext_data = ext
+            payload += struct.pack('!BH', ext_type, len(ext_data))
+            payload += ext_data
+        
+        # Encrypted data
+        payload += self.encrypted_data
+        
+        return payload
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        raise NotImplementedError('CellRelayIntroduce1V3 deserialization not implemented')
+
+    def _args_str(self):
+        return 'auth_key_len={}, encrypted_len={}'.format(
+            len(self.auth_key), len(self.encrypted_data)
+        )
+
+
+class CellRelayIntroduce2(TorCell):
+    """
+    V3 Hidden Service INTRODUCE2 cell.
+    
+    Per rend-spec-v3 section 3.2:
+    The INTRODUCE2 cell is sent from the introduction point to the
+    hidden service, containing the client's introduction data.
+    
+    It has the same format as INTRODUCE1 but is used in a different context.
+    """
+    NUM = 35
+
+    def __init__(self, auth_key: bytes, encrypted_data: bytes, 
+                 extensions: list = None, circuit_id: int = 0):
+        super().__init__(circuit_id)
+        self.auth_key = auth_key
+        self.encrypted_data = encrypted_data
+        self.extensions = extensions or []
+
+    def _serialize_payload(self):
+        # Auth key type and key
+        payload = struct.pack('!BH', 2, len(self.auth_key))  # 2 = ed25519
+        payload += self.auth_key
+        
+        # Extensions
+        payload += struct.pack('!B', len(self.extensions))
+        for ext in self.extensions:
+            ext_type, ext_data = ext
+            payload += struct.pack('!BH', ext_type, len(ext_data))
+            payload += ext_data
+        
+        # Encrypted data
+        payload += self.encrypted_data
+        
+        return payload
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        # Parse auth key
+        if len(payload) < 3:
+            return {'auth_key': b'', 'encrypted_data': b'', 'extensions': []}
+        
+        auth_key_type = payload[0]
+        auth_key_len = struct.unpack('!H', payload[1:3])[0]
+        offset = 3
+        
+        auth_key = payload[offset:offset + auth_key_len]
+        offset += auth_key_len
+        
+        # Parse extensions
+        extensions = []
+        if offset < len(payload):
+            n_ext = payload[offset]
+            offset += 1
+            for _ in range(n_ext):
+                if offset + 3 > len(payload):
+                    break
+                ext_type = payload[offset]
+                ext_len = struct.unpack('!H', payload[offset + 1:offset + 3])[0]
+                offset += 3
+                ext_data = payload[offset:offset + ext_len]
+                offset += ext_len
+                extensions.append((ext_type, ext_data))
+        
+        # Remaining is encrypted data
+        encrypted_data = payload[offset:]
+        
+        return {
+            'auth_key': auth_key,
+            'encrypted_data': encrypted_data,
+            'extensions': extensions
+        }
+
+    def _args_str(self):
+        return 'auth_key_len={}, encrypted_len={}'.format(
+            len(self.auth_key), len(self.encrypted_data)
+        )
+
+
+class CellRelayRendezvous1(TorCell):
+    """
+    RENDEZVOUS1 cell for v3 hidden services.
+    
+    Per rend-spec-v3 section 3.4:
+    Sent from hidden service to rendezvous point, containing:
+    - RENDEZVOUS_COOKIE (20 bytes): Cookie from INTRODUCE1
+    - HANDSHAKE_INFO (variable): Server handshake data
+    """
+    NUM = 36
+
+    def __init__(self, rendezvous_cookie: bytes, handshake_info: bytes, 
+                 circuit_id: int = 0):
+        super().__init__(circuit_id)
+        self.rendezvous_cookie = rendezvous_cookie
+        self.handshake_info = handshake_info
+
+    def _serialize_payload(self):
+        return struct.pack('!20s', self.rendezvous_cookie) + self.handshake_info
+
+    @staticmethod
+    def _deserialize_payload(payload, proto_version):
+        rendezvous_cookie = payload[:20]
+        handshake_info = payload[20:]
+        return {
+            'rendezvous_cookie': rendezvous_cookie,
+            'handshake_info': handshake_info
+        }
+
+    def _args_str(self):
+        return 'cookie=..., handshake_len={}'.format(len(self.handshake_info))
 
 
 class CellCerts(TorCell):

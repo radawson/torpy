@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **V3 Hidden Services**: Full client support for v3 onion services (56-character .onion addresses)
+  - Ed25519 cryptographic primitives for identity keys
+  - Blinded key derivation per rend-spec-v3 section 2.2
+  - V3 descriptor parsing and decryption
+  - HS-ntor handshake implementation
+  - V3 HSDir selection algorithm
+  - New relay cells: `CellRelayIntroduce1V3`, `CellRelayIntroduce2`, `CellRelayRendezvous1`
+  - Comprehensive test suite (33 tests for v3 hidden services)
 - **Link Protocol 5 Support**: Full implementation of TOR Link Protocol version 5
   - Added `CellPaddingNegotiate` (NUM=12) for link padding negotiation
   - Added `CellVPadding` (NUM=128) for variable-length padding

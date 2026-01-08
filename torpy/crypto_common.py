@@ -1,4 +1,5 @@
 # Copyright 2019 James Brown
+# Copyright 2025 Richard Dawson
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,7 +26,9 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.asymmetric import dh, padding
 from cryptography.hazmat.primitives.ciphers.modes import CTR
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey, X25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
+from cryptography.exceptions import InvalidSignature
 
 bend = default_backend()
 
@@ -183,3 +186,121 @@ def aes_ctr_decryptor(key, iv=b'\0' * 16):
 
 def aes_update(aes_cipher, data):
     return aes_cipher.update(data)
+
+
+# =============================================================================
+# Ed25519 Signature Functions (for v3 hidden services)
+# =============================================================================
+
+def ed25519_generate():
+    """
+    Generate a new Ed25519 private key.
+    
+    Returns:
+        Ed25519PrivateKey: A new Ed25519 private key
+    """
+    return Ed25519PrivateKey.generate()
+
+
+def ed25519_sign(private_key, message):
+    """
+    Sign a message using Ed25519.
+    
+    Args:
+        private_key: Ed25519PrivateKey
+        message: bytes to sign
+        
+    Returns:
+        bytes: 64-byte signature
+    """
+    return private_key.sign(message)
+
+
+def ed25519_verify(public_key, signature, message):
+    """
+    Verify an Ed25519 signature.
+    
+    Args:
+        public_key: Ed25519PublicKey
+        signature: 64-byte signature
+        message: bytes that were signed
+        
+    Returns:
+        bool: True if signature is valid, False otherwise
+    """
+    try:
+        public_key.verify(signature, message)
+        return True
+    except InvalidSignature:
+        return False
+
+
+def ed25519_public_from_private(private_key):
+    """
+    Get the public key from an Ed25519 private key.
+    
+    Args:
+        private_key: Ed25519PrivateKey
+        
+    Returns:
+        Ed25519PublicKey
+    """
+    return private_key.public_key()
+
+
+def ed25519_public_from_bytes(data):
+    """
+    Load an Ed25519 public key from raw bytes.
+    
+    Args:
+        data: 32-byte public key
+        
+    Returns:
+        Ed25519PublicKey
+    """
+    return Ed25519PublicKey.from_public_bytes(data)
+
+
+def ed25519_private_from_bytes(data):
+    """
+    Load an Ed25519 private key from raw bytes.
+    
+    Args:
+        data: 32-byte private key (seed)
+        
+    Returns:
+        Ed25519PrivateKey
+    """
+    return Ed25519PrivateKey.from_private_bytes(data)
+
+
+def ed25519_to_bytes(key):
+    """
+    Serialize an Ed25519 key to raw bytes.
+    
+    Args:
+        key: Ed25519PublicKey or Ed25519PrivateKey
+        
+    Returns:
+        bytes: 32-byte key data
+    """
+    if isinstance(key, Ed25519PublicKey):
+        return key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    else:
+        return key.private_bytes(
+            serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption()
+        )
+
+
+def ed25519_public_key_to_bytes(public_key):
+    """
+    Serialize an Ed25519 public key to raw bytes.
+    Alias for ed25519_to_bytes for public keys.
+    
+    Args:
+        public_key: Ed25519PublicKey
+        
+    Returns:
+        bytes: 32-byte public key
+    """
+    return public_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
