@@ -38,6 +38,7 @@ class TorCellSocket:
     """Handles communication with the relay."""
 
     RECV_BUFF_SIZE = 4094
+    CONNECTION_TIMEOUT = 5.0  # Timeout in seconds for initial connection attempts
 
     def __init__(self, router):
         self._router = router
@@ -97,18 +98,31 @@ class TorCellSocket:
 
         # Create socket and wrap with SSL context
         # Connect first, then wrap (required for Python 3.12+)
+        logger.debug('Attempting to connect to relay %s:%d...', self._router.ip, self._router.or_port)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(15.0)
-        sock.connect((self._router.ip, self._router.or_port))
+        sock.settimeout(self.CONNECTION_TIMEOUT)
+        try:
+            sock.connect((self._router.ip, self._router.or_port))
+        except socket.timeout:
+            logger.warning('Connection to relay %s:%d timed out after %.1f seconds', 
+                          self._router.ip, self._router.or_port, self.CONNECTION_TIMEOUT)
+            sock.close()
+            raise TorSocketConnectError(f'Connection timeout to {self._router.ip}:{self._router.or_port}')
+        except socket.error as e:
+            logger.warning('Connection to relay %s:%d failed: %s', 
+                          self._router.ip, self._router.or_port, e)
+            sock.close()
+            raise TorSocketConnectError(f'Connection failed to {self._router.ip}:{self._router.or_port}: {e}')
+        
         self._socket = context.wrap_socket(sock, server_hostname=None)
         
-        logger.debug('Connecting socket to %s relay...', self._router)
+        logger.debug('Socket connected to %s relay, initiating handshake...', self._router)
         try:
             # Socket is already connected and wrapped above
             handshake = TorHandshake(self, self._protocol)
             handshake.initiate()
         except Exception as e:
-            logger.error(e)
+            logger.error('Handshake failed for relay %s:%d: %s', self._router.ip, self._router.or_port, e)
             raise TorSocketConnectError(e)
 
     @property
