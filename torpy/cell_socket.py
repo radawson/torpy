@@ -14,6 +14,7 @@
 #
 
 import ssl
+import sys
 import time
 import socket
 import struct
@@ -54,9 +55,38 @@ class TorCellSocket:
         if self._socket:
             raise Exception('Already connected')
 
-        self._socket = ssl.wrap_socket(
-            socket.socket(socket.AF_INET, socket.SOCK_STREAM), ssl_version=ssl.PROTOCOL_TLSv1_2
-        )
+        # Create SSL context compatible with Python 3.6+ and Python 3.12+
+        # Python 3.12 removed ssl.wrap_socket(), so we use SSLContext approach
+        # This ensures compatibility with current TOR specifications requiring TLS 1.2+
+        if sys.version_info >= (3, 7):
+            # Python 3.7+ supports TLSVersion enum
+            context = ssl.create_default_context()
+            if hasattr(ssl, 'TLSVersion'):
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+        elif sys.version_info >= (3, 6):
+            # Python 3.6: use create_default_context (available since 3.4) or PROTOCOL_TLS
+            # Disable older protocols to ensure TLS 1.2+ only
+            try:
+                context = ssl.create_default_context()
+            except AttributeError:
+                # Fallback if create_default_context not available
+                if hasattr(ssl, 'PROTOCOL_TLS'):
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+                else:
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+            # Explicitly disable older protocols to enforce TLS 1.2+
+            context.options |= ssl.OP_NO_SSLv2
+            context.options |= ssl.OP_NO_SSLv3
+            context.options |= ssl.OP_NO_TLSv1
+            context.options |= ssl.OP_NO_TLSv1_1
+        else:
+            # Fallback for older versions (though torpy requires Python 3.6+)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+
+        # Create socket and wrap with SSL context
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket = context.wrap_socket(sock)
+        
         logger.debug('Connecting socket to %s relay...', self._router)
         try:
             self._socket.settimeout(15.0)
