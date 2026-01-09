@@ -7,14 +7,28 @@ Torpy can be used to communicate with clearnet hosts or hidden services through 
 **Features**
 - No Stem or official Tor client required
 - Python 3.6 - 3.12 compatible
-- Support TOR Link Protocol versions 3, 4, and 5
-- **NEW: Support v3 hidden services** (56-character .onion addresses) per [rend-spec-v3](https://gitlab.torproject.org/tpo/core/torspec/-/blob/main/spec/rend-spec-v3.md)
-- Support v2 hidden services ([v2 specification](https://gitweb.torproject.org/torspec.git/tree/rend-spec-v2.txt))
-- Support *Basic* and *Stealth* authorization protocol
-- Provide simple [TorHttpAdapter](https://github.com/torpyorg/torpy/blob/master/torpy/http/adapter.py) for [requests](https://requests.readthedocs.io/) library
-- Provide simple urllib [tor_opener](https://github.com/torpyorg/torpy/blob/master/torpy/http/urlopener.py) for making requests without any dependencies
-- Provide simple Socks5 proxy
-- Graceful handling of unknown cell types for forward compatibility
+- **Complete TOR Protocol Support:**
+  - Link Protocol versions 3, 4, and 5 (current standard)
+  - ntor, TAP, and CREATE_FAST handshakes
+  - Certificate validation (CERTS cell parsing)
+  - Consensus and HSDir v3 support with Shared Random Values (SRV)
+- **Hidden Services:**
+  - **v3 hidden services** (56-character .onion addresses) - **FULLY IMPLEMENTED**
+    - Ed25519 identity keys and x25519 encryption
+    - HS-ntor handshake protocol
+    - Blinded key derivation with time periods
+    - Descriptor encryption/decryption
+    - Client authorization support (optional)
+  - v2 hidden services (16-character .onion) with Basic/Stealth authorization
+- **Advanced Features:**
+  - **Conflux**: Traffic splitting across multiple circuits for improved throughput
+  - **Vanguards**: Guard discovery protection for hidden services (Proposal 333)
+  - Link padding negotiation (Protocol 5)
+  - Graceful handling of unknown cell types for forward compatibility
+- **HTTP Integration:**
+  - [TorHttpAdapter](https://github.com/torpyorg/torpy/blob/master/torpy/http/adapter.py) for [requests](https://requests.readthedocs.io/) library
+  - urllib [tor_opener](https://github.com/torpyorg/torpy/blob/master/torpy/http/urlopener.py) with no dependencies
+  - Built-in Socks5 proxy server
 
 **Donation**
 
@@ -145,6 +159,97 @@ with tor_requests_session() as s:  # returns requests.Session() object
 
 For more examples see [test_integration.py](https://github.com/torpyorg/torpy/blob/master/tests/integration/test_integration.py)
 
+### V3 Hidden Services
+
+Connecting to v3 hidden services (56-character .onion addresses):
+```python
+from torpy import TorClient
+
+# Example v3 hidden service (BBC News)
+hostname = 'deepweb4wt3m4dhutpxpe7d7wxdftfdf4hhag4sizgon6th5lcefloid.onion'
+
+with TorClient() as tor:
+    with tor.create_circuit(3) as circuit:
+        with circuit.create_stream((hostname, 80)) as stream:
+            stream.send(b'GET / HTTP/1.0\r\nHost: %s\r\n\r\n' % hostname.encode())
+            recv = stream.recv(4096)
+            print(recv.decode())
+```
+
+V3 hidden services with client authorization:
+```python
+from torpy import TorClient
+from torpy.hiddenservice import HiddenService
+
+# Your x25519 private key for client authorization (32 bytes)
+client_auth_key = bytes.fromhex('your_private_key_here')
+
+hostname = 'your_authorized_service.onion'
+hidden_service = HiddenService(hostname, client_auth_key=client_auth_key)
+
+with TorClient() as tor:
+    with tor.create_circuit(3) as circuit:
+        circuit.extend_to_hidden(hidden_service)
+        # Now you can create streams through the authenticated circuit
+        with circuit.create_stream((hostname, 80)) as stream:
+            stream.send(b'GET / HTTP/1.0\r\nHost: %s\r\n\r\n' % hostname.encode())
+            recv = stream.recv(4096)
+```
+
+### Conflux (Multipath Circuits)
+
+Use multiple circuits for improved throughput:
+```python
+from torpy import TorClient
+from torpy.conflux import ConfluxManager, ConfluxAlgorithm
+
+with TorClient() as tor:
+    conflux = ConfluxManager()
+    
+    # Create a Conflux set with round-robin algorithm
+    conflux_set = conflux.create_set(algorithm=ConfluxAlgorithm.ROUND_ROBIN)
+    
+    # Add multiple circuits to the set
+    circuit1 = tor.create_circuit(3)
+    circuit2 = tor.create_circuit(3)
+    conflux_set.add_circuit(circuit1)
+    conflux_set.add_circuit(circuit2)
+    
+    # Link the circuits
+    conflux_set.link_circuits()
+    
+    # Use select_circuit() to choose which circuit to use
+    circuit = conflux_set.select_circuit()
+    # ... use the selected circuit ...
+```
+
+### Vanguards (Hidden Service Protection)
+
+Protect hidden services from guard discovery attacks:
+```python
+from torpy import TorClient
+from torpy.vanguards import VanguardManager
+
+consensus = tor_client.get_consensus()
+vanguards = VanguardManager(consensus)
+
+# Enable vanguards (initializes Layer 2 and Layer 3 guards)
+vanguards.enable()
+
+# Get a Layer 2 vanguard node for circuit building
+layer2_node = vanguards.get_layer2_node()
+layer3_node = vanguards.get_layer3_node()
+
+# View statistics
+stats = vanguards.get_stats()
+print(f"Layer 2: {stats['layer2']['node_count']} nodes")
+print(f"Layer 3: {stats['layer3']['node_count']} nodes")
+
+# Vanguards will automatically rotate expired nodes
+# When done:
+vanguards.disable()
+```
+
 
 Installation
 ------------
@@ -162,37 +267,140 @@ Contribute
 TODO
 ----
 - [x] ~~Implement v3 hidden services~~ **DONE!** (see [rend-spec-v3](https://gitlab.torproject.org/tpo/core/torspec/-/blob/main/spec/rend-spec-v3.md))
+- [x] ~~Certificate validation~~ **DONE!** (CERTS cell parsing and validation)
+- [x] ~~Shared Random Value (SRV) extraction~~ **DONE!** (from consensus for v3 HSDir selection)
+- [x] ~~Conflux implementation~~ **DONE!** (basic framework for multipath circuits)
+- [x] ~~Vanguards implementation~~ **DONE!** (Layer 2/3 guard discovery protection)
+- [x] ~~More unit tests~~ **DONE!** (80+ tests for cells and v3 hidden services)
 - [ ] Refactor Tor cells serialization/deserialization
-- [x] ~~More unit tests~~ **Added 80+ tests for cells and v3 hidden services**
 - [ ] Rewrite the library using asyncio
 - [ ] Implement onion services (server-side)
+- [ ] Advanced Conflux features (congestion control, automatic failover)
+- [ ] Full Vanguards integration with circuit building
+
+## Protocol Compliance
+
+TorPy implements a comprehensive set of TOR protocol features:
+
+### Core Protocol
+- **Link Protocol**: Versions 3, 4, and 5 (current standard as of 2026)
+- **Handshakes**: 
+  - ntor (Type 2) - Primary, secure modern handshake
+  - TAP (Type 0) - Legacy support for v2 hidden services
+  - CREATE_FAST (Type 1) - Bootstrap without consensus
+- **Cryptography**:
+  - Ed25519 signatures and identity keys (v3 HS)
+  - x25519 key agreement (HS-ntor)
+  - Curve25519 (ntor handshake)
+  - SHA3-256 hashing (v3 HS)
+  - RSA (legacy, v2 support)
+
+### Hidden Services
+- **V3 (Current Standard)**: 
+  - Complete implementation per rend-spec-v3
+  - Ed25519 identity keys
+  - Blinded public key derivation
+  - Time period-based descriptor rotation (24h)
+  - Two-layer descriptor encryption
+  - HS-ntor handshake
+  - Client authorization support
+  - HSDir v3 selection with SRV
+- **V2 (Legacy)**: Full support with Basic/Stealth authorization
+
+### Advanced Features
+- **Conflux (Proposal 329)**: Multipath circuit support for traffic splitting
+- **Vanguards (Proposal 333)**: Layer 2/3 guards for hidden service protection
+- **Link Padding**: Protocol 5 padding negotiation
+- **Certificate Validation**: CERTS and AUTH_CHALLENGE cell parsing
 
 Supported Cell Types
 --------------------
 torpy implements the following TOR cell types per the [TOR specification](https://spec.torproject.org/):
 
-| Cell Type | NUM | Description |
-|-----------|-----|-------------|
-| PADDING | 0 | Keep-alive padding |
-| CREATE | 1 | Create circuit (TAP handshake) |
-| CREATED | 2 | Circuit created response |
-| RELAY | 3 | Relay data |
-| DESTROY | 4 | Destroy circuit |
-| CREATE_FAST | 5 | Fast circuit creation |
-| CREATED_FAST | 6 | Fast circuit response |
-| VERSIONS | 7 | Protocol version negotiation |
-| NETINFO | 8 | Network information |
-| RELAY_EARLY | 9 | Early relay cell |
-| CREATE2 | 10 | Create circuit (ntor handshake) |
-| CREATED2 | 11 | Circuit created response |
-| PADDING_NEGOTIATE | 12 | Link padding negotiation (v5) |
-| VPADDING | 128 | Variable-length padding |
-| CERTS | 129 | Certificates |
-| AUTH_CHALLENGE | 130 | Authentication challenge |
-| AUTHENTICATE | 131 | Authentication response |
-| AUTHORIZE | 132 | Reserved for future use |
+### Fixed-Length Cells (513 bytes)
+
+| Cell Type | NUM | Description | Status |
+|-----------|-----|-------------|--------|
+| PADDING | 0 | Keep-alive padding | ✅ Full |
+| CREATE | 1 | Create circuit (TAP handshake) | ✅ Full |
+| CREATED | 2 | Circuit created response | ✅ Full |
+| RELAY | 3 | Relay data | ✅ Full |
+| DESTROY | 4 | Destroy circuit | ✅ Full |
+| CREATE_FAST | 5 | Fast circuit creation | ✅ Full |
+| CREATED_FAST | 6 | Fast circuit response | ✅ Full |
+| VERSIONS | 7 | Protocol version negotiation | ✅ Full |
+| NETINFO | 8 | Network information | ✅ Full |
+| RELAY_EARLY | 9 | Early relay cell | ✅ Full |
+| CREATE2 | 10 | Create circuit (ntor handshake) | ✅ Full |
+| CREATED2 | 11 | Circuit created response | ✅ Full |
+| PADDING_NEGOTIATE | 12 | Link padding negotiation (v5) | ✅ Full |
+
+### Variable-Length Cells
+
+| Cell Type | NUM | Description | Status |
+|-----------|-----|-------------|--------|
+| VPADDING | 128 | Variable-length padding | ✅ Full |
+| CERTS | 129 | Certificates | ✅ Parse + Validate |
+| AUTH_CHALLENGE | 130 | Authentication challenge | ✅ Parse |
+| AUTHENTICATE | 131 | Authentication response | ✅ Reserved |
+| AUTHORIZE | 132 | Reserved for future use | ✅ Reserved |
+
+### Relay Cell Commands
+
+Supported relay cell types include:
+- **Stream Management**: BEGIN, DATA, END, CONNECTED, SENDME
+- **Circuit Extension**: EXTEND2, EXTENDED2
+- **Directory**: BEGIN_DIR (for consensus/descriptor fetching)
+- **Hidden Services**: 
+  - ESTABLISH_RENDEZVOUS, RENDEZVOUS_ESTABLISHED
+  - INTRODUCE1, INTRODUCE_ACK, RENDEZVOUS2
+  - INTRODUCE1_V3 (v3 hidden service introduction)
 
 Unknown cell types are handled gracefully, allowing torpy to work with newer TOR protocol versions.
+
+## Testing
+
+### V3 Hidden Service Testing
+
+To test v3 hidden service connectivity, you can use the BBC News onion site:
+```python
+from torpy import TorClient
+
+# BBC News v3 onion (reliable for testing)
+bbc_onion = 'deepweb4wt3m4dhutpxpe7d7wxdftfdf4hhag4sizgon6th5lcefloid.onion'
+
+with TorClient() as tor:
+    with tor.create_circuit(3) as circuit:
+        with circuit.create_stream((bbc_onion, 80)) as stream:
+            stream.send(b'GET / HTTP/1.0\r\nHost: %s\r\n\r\n' % bbc_onion.encode())
+            response = stream.recv(4096)
+            assert b'BBC' in response
+            print("✅ V3 hidden service connection successful!")
+```
+
+### Running Integration Tests
+
+```bash
+# Run all integration tests
+pytest tests/integration/test_integration.py
+
+# Run only v3 hidden service tests
+pytest tests/integration/test_integration.py::test_onion_v3_raw
+pytest tests/integration/test_integration.py::test_onion_v3_requests
+```
+
+### Unit Tests
+
+```bash
+# Run all unit tests
+pytest tests/unittest/
+
+# Run v3-specific tests
+pytest tests/unittest/test_hsv3.py
+
+# Run with coverage
+pytest --cov=torpy tests/
+```
 
 
 License

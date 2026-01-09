@@ -618,7 +618,7 @@ class TorCircuit:
         introduction_point = self.last_node.router
         introducee = rendezvous_circuit.last_node.router
 
-        # ! For Introduce we must use tap handshake
+        # ! For V2 Introduce we must use tap handshake
         extend_node = CircuitNode(introduction_point, key_agreement_cls=TapKeyAgreement)
         public_key_bytes = extend_node.key_agreement.handshake
 
@@ -628,6 +628,123 @@ class TorCircuit:
         cell_ack = self.send_relay_wait(inner_cell, CellRelayIntroduceAck)
         logger.info('Introduced (%r)', cell_ack)
 
+        return extend_node
+
+    def rendezvous_introduce_v3(self, rendezvous_circuit, rendezvous_cookie, hidden_service, intro_data):
+        """
+        Send v3 Introduce1 cell to introduction point.
+        
+        Args:
+            rendezvous_circuit: The rendezvous circuit
+            rendezvous_cookie: Random 20-byte cookie
+            hidden_service: HiddenService object with v3 details
+            intro_data: Introduction point data from descriptor
+            
+        Returns:
+            CircuitNode with HS-ntor handshake initialized
+        """
+        # tor ref: hs_client_send_introduce1 (v3)
+        import struct
+        from torpy.hs_ntor import (
+            HSNtorHandshake,
+            get_time_period_num,
+            curve25519_private,
+            curve25519_public_from_private,
+            curve25519_to_bytes,
+        )
+        from torpy.crypto_common import aes_ctr_encryptor
+        from torpy.keyagreement import KeyAgreement
+        
+        introduction_point = self.last_node.router
+        introducee = rendezvous_circuit.last_node.router
+        
+        # Get introduction point keys from descriptor
+        intro_enc_key = intro_data.get('enc-key')
+        intro_auth_key = intro_data.get('auth-key')
+        if not intro_enc_key or not intro_auth_key:
+            raise ValueError('Missing encryption/auth keys in introduction point data')
+        
+        # Get subcredential for encryption
+        time_period_num = get_time_period_num()
+        subcredential = hidden_service.get_subcredential(time_period_num)
+        
+        # Initialize HS-ntor handshake
+        hs_ntor = HSNtorHandshake(intro_enc_key, intro_auth_key, subcredential)
+        client_ephemeral_pk = hs_ntor.client_pubkey
+        
+        # Build the plaintext INTRODUCE1 payload
+        # Per rend-spec-v3 section 3.2.1:
+        # RENDEZVOUS_COOKIE     [20 bytes]
+        # N_EXTENSIONS          [1 byte]
+        # EXTENSIONS            [N_EXTENSIONS times]
+        # ONION_KEY_TYPE        [1 byte] (ntor = 1)
+        # ONION_KEY_LEN         [2 bytes]
+        # ONION_KEY             [ONION_KEY_LEN bytes]
+        # LINK_SPECIFIERS_NUM   [1 byte]
+        # LINK_SPECIFIERS       [variable]
+        
+        plaintext = b''
+        plaintext += rendezvous_cookie  # 20 bytes
+        plaintext += struct.pack('!B', 0)  # No extensions
+        plaintext += struct.pack('!B', 1)  # ONION_KEY_TYPE: ntor
+        plaintext += struct.pack('!H', len(client_ephemeral_pk))  # ONION_KEY_LEN
+        plaintext += client_ephemeral_pk  # Client's ephemeral x25519 public key
+        
+        # Add link specifiers for rendezvous point
+        # We need at least the fingerprint
+        link_spec = b''
+        # Type 2: Legacy ID (RSA fingerprint)
+        fingerprint = bytes.fromhex(introducee.fingerprint) if isinstance(introducee.fingerprint, str) else introducee.fingerprint
+        link_spec += struct.pack('!BB', 2, 20)  # Type, Length
+        link_spec += fingerprint[:20]
+        
+        plaintext += struct.pack('!B', 1)  # Number of link specifiers
+        plaintext += link_spec
+        
+        # Encrypt the plaintext
+        enc_key, mac_key = hs_ntor.create_onion_key()
+        encryptor = aes_ctr_encryptor(enc_key, b'\x00' * 16)  # IV is all zeros for HS
+        encrypted_data = encryptor.update(plaintext)
+        
+        # Create v3 Introduce1 cell
+        from torpy.cells import CellRelayIntroduce1V3
+        
+        # Legacy key ID is the intro point's RSA fingerprint
+        legacy_key_id = bytes.fromhex(introduction_point.fingerprint)[:20] if isinstance(introduction_point.fingerprint, str) else introduction_point.fingerprint[:20]
+        
+        inner_cell = CellRelayIntroduce1V3(
+            legacy_key_id=legacy_key_id,
+            auth_key=intro_auth_key,
+            encrypted_data=encrypted_data,
+            circuit_id=self._id
+        )
+        
+        cell_ack = self.send_relay_wait(inner_cell, CellRelayIntroduceAck)
+        logger.info('V3 Introduced (%r)', cell_ack)
+        
+        # Create a CircuitNode with the HS-ntor handshake
+        # We need a custom KeyAgreement class that wraps HS-ntor
+        class HSNtorKeyAgreement(KeyAgreement):
+            def __init__(self, hs_ntor_handshake):
+                self._hs_ntor = hs_ntor_handshake
+                self._public_key = client_ephemeral_pk
+            
+            @property
+            def handshake(self):
+                return self._public_key
+            
+            def complete(self, handshake_response):
+                # Complete the HS-ntor handshake with the response from Rendezvous2
+                # Extract server pubkey from response and call complete_handshake
+                server_pubkey = handshake_response[:32]  # First 32 bytes is Y
+                auth_input = handshake_response[32:]  # Rest is MAC
+                forward_key, backward_key = self._hs_ntor.complete_handshake(server_pubkey, auth_input)
+                return (forward_key, backward_key)
+        
+        # Create node with HS-ntor handshake
+        extend_node = CircuitNode(introduction_point)
+        extend_node.key_agreement = HSNtorKeyAgreement(hs_ntor)
+        
         return extend_node
 
     @check_connected

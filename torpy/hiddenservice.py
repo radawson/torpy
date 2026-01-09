@@ -298,9 +298,34 @@ class HiddenServiceConnector:
         self._consensus = consensus
 
     def get_responsibles_dir(self, hidden_service):
-        for i, responsible_router in enumerate(self._consensus.get_responsibles(hidden_service)):
-            replica = 1 if i >= 3 else 0
-            yield ResponsibleDir(responsible_router, replica, self._circuit, self._consensus)
+        """
+        Get responsible HSDirs for the hidden service.
+        
+        Args:
+            hidden_service: HiddenService object (v2 or v3)
+            
+        Yields:
+            ResponsibleDir objects
+        """
+        if hidden_service.is_v3:
+            # V3 hidden service - use v3 HSDir selection
+            time_period_num = get_time_period_num()
+            blinded_pubkey = hidden_service.get_blinded_pubkey(time_period_num)
+            
+            # Get v3 responsible HSDirs (2 replicas, 4 HSDirs each)
+            for replica in range(2):
+                hsdir_list = self._consensus.get_responsibles_v3(
+                    blinded_pubkey,
+                    time_period_num,
+                    spread=4
+                )
+                for responsible_router in hsdir_list[:4]:  # 4 HSDirs per replica
+                    yield ResponsibleDir(responsible_router, replica, self._circuit, self._consensus)
+        else:
+            # V2 hidden service - use v2 HSDir selection
+            for i, responsible_router in enumerate(self._consensus.get_responsibles(hidden_service)):
+                replica = 1 if i >= 3 else 0
+                yield ResponsibleDir(responsible_router, replica, self._circuit, self._consensus)
 
 
 class EncPointsBuffer:
@@ -387,12 +412,21 @@ class ResponsibleDir:
         return self._replica
 
     def get_introductions(self, hidden_service):
-        descriptor_id = hidden_service.get_descriptor_id(self.replica)
-        response = self._fetch_descriptor(descriptor_id)
-        for intro_point in self._get_intro_points(response, hidden_service.descriptor_cookie):
-            yield intro_point
+        if hidden_service.is_v3:
+            # V3 hidden service
+            time_period_num = get_time_period_num()
+            blinded_pubkey = hidden_service.get_blinded_pubkey(time_period_num)
+            response = self._fetch_descriptor(None, is_v3=True, blinded_pubkey=blinded_pubkey)
+            for intro_point in self._get_intro_points_v3(response, hidden_service):
+                yield intro_point
+        else:
+            # V2 hidden service
+            descriptor_id = hidden_service.get_descriptor_id(self.replica)
+            response = self._fetch_descriptor(descriptor_id, is_v3=False)
+            for intro_point in self._get_intro_points(response, hidden_service.descriptor_cookie):
+                yield intro_point
 
-    def _fetch_descriptor(self, descriptor_id):
+    def _fetch_descriptor(self, descriptor_id, is_v3=False, blinded_pubkey=None):
         # tor ref: rend_client_fetch_v2_desc
         # tor ref: fetch_v3_desc
 
@@ -401,9 +435,23 @@ class ResponsibleDir:
             assert directory_circuit.nodes_count == 2
 
             with directory_circuit.create_dir_client() as dir_client:
-                # tor ref: directory_send_command (DIR_PURPOSE_FETCH_RENDDESC_V2)
-                descriptor_id_str = b32encode(descriptor_id).decode().lower()
-                descriptor_path = f'/tor/rendezvous2/{descriptor_id_str}'
+                if is_v3:
+                    # V3 descriptor fetch
+                    # Path format: /tor/hs/3/<hsdir_index>
+                    if blinded_pubkey is None:
+                        raise ValueError('V3 descriptor fetch requires blinded_pubkey')
+                    
+                    # The hsdir_index is the first 8 bytes of blinded_pubkey in base64
+                    from base64 import b64encode
+                    hsdir_index = b64encode(blinded_pubkey).decode().replace('=', '').replace('+', '-').replace('/', '_')
+                    descriptor_path = f'/tor/hs/3/{hsdir_index}'
+                    logger.debug('Fetching v3 descriptor: %s', descriptor_path)
+                else:
+                    # V2 descriptor fetch
+                    # tor ref: directory_send_command (DIR_PURPOSE_FETCH_RENDDESC_V2)
+                    descriptor_id_str = b32encode(descriptor_id).decode().lower()
+                    descriptor_path = f'/tor/rendezvous2/{descriptor_id_str}'
+                    logger.debug('Fetching v2 descriptor: %s', descriptor_path)
 
                 status, response = dir_client.get(descriptor_path)
                 response = response.decode()
@@ -418,6 +466,70 @@ class ResponsibleDir:
         onion_router.service_key = intro_point_info['service_key']
         onion_router.onion_key = intro_point_info['onion_key']
         return onion_router
+
+    def _get_intro_points_v3(self, response, hidden_service):
+        """
+        Parse v3 hidden service descriptor and extract introduction points.
+        
+        Args:
+            response: Raw descriptor text
+            hidden_service: HiddenService object with v3 details
+            
+        Yields:
+            IntroductionPointV3 objects
+        """
+        # Parse and decrypt v3 descriptor
+        time_period_num = get_time_period_num()
+        subcredential = hidden_service.get_subcredential(time_period_num)
+        
+        try:
+            v3_descriptor = V3HSDescriptor(response)
+            decrypted = decrypt_v3_descriptor(
+                v3_descriptor,
+                subcredential,
+                x25519_client_key=hidden_service._client_auth_key
+            )
+            
+            # Parse introduction points from decrypted descriptor
+            intro_points_data = decrypted.get('introduction-point', [])
+            if not intro_points_data:
+                logger.warning('No introduction points found in v3 descriptor')
+                return
+            
+            for intro_point_raw in intro_points_data:
+                # Parse link specifiers to find router
+                link_specifiers = parse_link_specifiers(intro_point_raw.get('link-specifiers', b''))
+                
+                # Try to find router by fingerprint or ed25519 id
+                router = None
+                for link_spec in link_specifiers:
+                    if link_spec['type'] == 0:  # TLS-over-TCP, IPv4
+                        # We have IP and port, try to find in consensus
+                        continue
+                    elif link_spec['type'] == 2:  # Legacy identity (RSA)
+                        fingerprint = link_spec['data'].hex().upper()
+                        router = self._consensus.get_router(fingerprint)
+                        if router:
+                            break
+                    elif link_spec['type'] == 3:  # Ed25519 identity
+                        # Try to find by ed25519 id in consensus
+                        # For now, skip as consensus lookup by ed25519 not implemented
+                        continue
+                
+                if not router:
+                    logger.warning('Could not find router in consensus for intro point')
+                    continue
+                
+                # Store v3-specific data on the router
+                router.intro_auth_key = intro_point_raw.get('auth-key')
+                router.enc_key = intro_point_raw.get('enc-key')
+                router.enc_key_cert = intro_point_raw.get('enc-key-cert')
+                
+                yield IntroductionPointV3(router, self._circuit, intro_point_raw)
+                
+        except Exception as e:
+            logger.error('Failed to parse v3 descriptor: %s', e)
+            raise DescriptorNotAvailable(f'Failed to parse v3 descriptor: {e}')
 
     def _get_intro_points(self, response, descriptor_cookie):
         intro_points_raw_base64 = HSDescriptorParser.parse(response)
@@ -459,7 +571,7 @@ class IntroductionPoint:
             with self._circuit.create_new_circuit(extend_routers=[self._introduction_router]) as intro_circuit:
                 assert intro_circuit.nodes_count == 2
 
-                # TODO: tor ref: v3 hs_client send_introduce1
+                # V2 uses TAP handshake for introduction
                 # Send Introduce1
                 extend_node = intro_circuit.rendezvous_introduce(
                     self._circuit,
@@ -470,4 +582,44 @@ class IntroductionPoint:
 
                 rendezvous2_cell = w.get(timeout=10)
                 extend_node.complete_handshake(rendezvous2_cell.handshake_data)
+                return extend_node
+
+
+class IntroductionPointV3:
+    """V3 hidden service introduction point."""
+    
+    def __init__(self, router, circuit: 'TorCircuit', intro_data: dict):
+        self._introduction_router = router
+        self._circuit = circuit
+        self._intro_data = intro_data
+
+    def connect(self, hidden_service, rendezvous_cookie):
+        """
+        Connect to v3 hidden service through this introduction point.
+        
+        Args:
+            hidden_service: HiddenService object
+            rendezvous_cookie: Random 20-byte rendezvous cookie
+            
+        Returns:
+            CircuitNode with completed HS-ntor handshake
+        """
+        # Waiting for CellRelayRendezvous2 in our main circuit
+        with self._circuit.create_waiter(CellRelayRendezvous2) as w:
+            # Create introduction point circuit
+            with self._circuit.create_new_circuit(extend_routers=[self._introduction_router]) as intro_circuit:
+                assert intro_circuit.nodes_count == 2
+
+                # V3 uses HS-ntor handshake for introduction
+                logger.info('Sending v3 Introduce1 cell...')
+                extend_node = intro_circuit.rendezvous_introduce_v3(
+                    self._circuit,
+                    rendezvous_cookie,
+                    hidden_service,
+                    self._intro_data,
+                )
+
+                rendezvous2_cell = w.get(timeout=10)
+                extend_node.complete_handshake(rendezvous2_cell.handshake_data)
+                logger.info('V3 rendezvous completed')
                 return extend_node

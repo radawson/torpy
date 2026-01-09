@@ -76,6 +76,34 @@ def test_onion_raw():
                 assert 'StickyNotes' in recv, 'wrong data received'
 
 
+@retry(RETRIES, (TimeoutError, ConnectionError, ))
+def test_onion_v3_raw():
+    """Test connecting to v3 hidden service (BBC .onion site)."""
+    hostname = 'deepweb4wt3m4dhutpxpe7d7wxdftfdf4hhag4sizgon6th5lcefloid.onion'
+    logger.info('Testing v3 hidden service: %s', hostname)
+    
+    with TorClient() as tor:
+        # Choose random guard node and create 3-hops circuit
+        with tor.create_circuit(3) as circuit:
+            logger.info('Circuit created, connecting to v3 hidden service...')
+            # Create tor stream to host
+            with circuit.create_stream((hostname, 80)) as stream:
+                # Send HTTP request
+                request = b'GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' % hostname.encode()
+                logger.debug('Sending request: %s', request)
+                stream.send(request)
+                
+                recv = recv_all(stream).decode(errors='ignore')
+                logger.info('Received %d bytes from v3 hidden service', len(recv))
+                logger.debug('Response preview: %s', recv[:500])
+                
+                # Verify we got a valid HTTP response
+                assert recv.startswith('HTTP/'), 'Invalid HTTP response received'
+                # BBC site should have BBC in the response
+                assert 'BBC' in recv or 'bbc' in recv.lower(), 'Expected BBC content not found'
+                logger.info('✓ V3 hidden service test passed!')
+
+
 def test_requests_no_agent():
     data = requests_request('https://httpbin.org/headers', retries=RETRIES)
     assert 'User-Agent' not in data
@@ -221,6 +249,22 @@ def test_requests_hidden():
         r = sess.get('http://{}/'.format(HS_BASIC_HOST), timeout=30)
         logger.warning(r)
         logger.warning(r.text)
+
+
+@retry(RETRIES, (TimeoutError, ConnectionError, ))
+def test_requests_v3_hidden():
+    """Test v3 hidden service using requests interface."""
+    hostname = 'deepweb4wt3m4dhutpxpe7d7wxdftfdf4hhag4sizgon6th5lcefloid.onion'
+    logger.info('Testing v3 hidden service with requests: %s', hostname)
+    
+    with tor_requests_session(retries=RETRIES) as sess:
+        r = sess.get('http://{}/'.format(hostname), timeout=60)
+        logger.info('Response status: %d', r.status_code)
+        logger.debug('Response preview: %s', r.text[:500])
+        
+        assert r.status_code == 200, f'Expected 200, got {r.status_code}'
+        assert 'BBC' in r.text or 'bbc' in r.text.lower(), 'Expected BBC content not found'
+        logger.info('✓ V3 hidden service requests test passed!')
 
 
 @retry(2, (TimeoutError, ConnectionError, ))

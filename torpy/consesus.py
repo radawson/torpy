@@ -30,7 +30,7 @@ from torpy.documents import TorDocumentsFactory
 from torpy.guard import TorGuard
 from torpy.parsers import RouterDescriptorParser
 from torpy.cache_storage import TorCacheDirStorage
-from torpy.crypto_common import rsa_verify, rsa_load_der, sha3_256
+from torpy.crypto_common import rsa_verify, rsa_load_der, sha3_256, b64decode
 from torpy.documents.network_status import RouterFlags, NetworkStatusDocument, FetchDescriptorError, Router
 from torpy.documents.dir_key_certificate import DirKeyCertificateList
 from torpy.documents.network_status_diff import NetworkStatusDiffDocument
@@ -354,6 +354,44 @@ class TorConsensus:
         flags = [RouterFlags.HSDir]
         return self.get_routers(flags, has_dir_port=True)
 
+    def get_shared_random_value(self, use_previous=False):
+        """
+        Extract the Shared Random Value (SRV) from the consensus.
+        
+        Args:
+            use_previous: If True, returns previous value, else current value
+            
+        Returns:
+            32-byte shared random value, or None if not available
+        """
+        doc = self.get_document()
+        if use_previous:
+            srv_line = doc.data.get('shared_rand_previous_value')
+        else:
+            srv_line = doc.data.get('shared_rand_current_value')
+        
+        if not srv_line:
+            logger.debug('No shared random value in consensus')
+            return None
+        
+        # Format: "NumReveals Value"
+        # Example: "9 p4+CMGa6M7EhDqGNpofcJ2MeQ7f7qdF8QslK+AOnrQg="
+        parts = srv_line.split(' ', 1)
+        if len(parts) != 2:
+            logger.warning('Invalid shared-rand format: %s', srv_line)
+            return None
+        
+        try:
+            srv_b64 = parts[1]
+            srv_bytes = b64decode(srv_b64)
+            if len(srv_bytes) != 32:
+                logger.warning('Shared random value wrong length: %d', len(srv_bytes))
+                return None
+            return srv_bytes
+        except Exception as e:
+            logger.warning('Failed to decode shared random value: %s', e)
+            return None
+
     def _create_dir_circuit(self, purpose=None):
         if self._document and self._document.is_reasonably_live:
             router = self.get_random_router(flags=[RouterFlags.Guard], with_renew=False)
@@ -486,11 +524,16 @@ class TorConsensus:
 
         TIME_PERIOD_LENGTH = 1440 * 60  # 24 hours in seconds
 
-        # Use placeholder SRV if not provided
+        # Use SRV from consensus if not provided
         if shared_random_value is None:
-            # In production, this should come from the consensus
-            # For now, use a deterministic placeholder
-            shared_random_value = sha3_256(b"shared-random-placeholder")
+            shared_random_value = self.get_shared_random_value()
+            if shared_random_value is None:
+                # Fallback to previous value
+                shared_random_value = self.get_shared_random_value(use_previous=True)
+            if shared_random_value is None:
+                # Last resort fallback - use deterministic placeholder
+                logger.warning('No SRV in consensus, using placeholder')
+                shared_random_value = sha3_256(b"shared-random-placeholder")
 
         # Compute node indices for all HSDirs
         indexed_routers = []

@@ -985,6 +985,26 @@ class CellRelayRendezvous1(TorCell):
 
 
 class CellCerts(TorCell):
+    """
+    CERTS cell containing certificates for the connection.
+    
+    Per tor-spec.txt section 4.2:
+    A CERTS cell contains one or more certificates:
+    - N: Number of certs (1 byte)
+    - N times:
+      - CertType (1 byte)
+      - CLEN (2 bytes)
+      - Certificate (CLEN bytes)
+    
+    Certificate types:
+    1: Link key certificate (RSA)
+    2: RSA identity certificate
+    3: RSA AUTHENTICATE cell link certificate
+    4: Ed25519 signing key
+    5: TLS link certificate (Ed25519-signed)
+    6: Ed25519 AUTHENTICATE cell key
+    7: Ed25519 identity certificate (cross-certifying RSA identity)
+    """
     NUM = 129
 
     def __init__(self, certs, circuit_id=0):
@@ -996,11 +1016,47 @@ class CellCerts(TorCell):
 
     @staticmethod
     def _deserialize_payload(payload, proto_version):
-        # TODO: implement parse
-        return {'certs': payload}
+        """
+        Parse the CERTS cell payload.
+        
+        Returns:
+            dict with 'certs' key containing list of (cert_type, cert_data) tuples
+        """
+        if len(payload) < 1:
+            return {'certs': []}
+        
+        n_certs = payload[0]
+        certs = []
+        offset = 1
+        
+        for _ in range(n_certs):
+            if offset + 3 > len(payload):
+                break
+            
+            cert_type = payload[offset]
+            cert_len = struct.unpack('!H', payload[offset+1:offset+3])[0]
+            offset += 3
+            
+            if offset + cert_len > len(payload):
+                break
+            
+            cert_data = payload[offset:offset+cert_len]
+            offset += cert_len
+            
+            certs.append((cert_type, cert_data))
+        
+        return {'certs': certs}
 
 
 class CellAuthChallenge(TorCell):
+    """
+    AUTH_CHALLENGE cell containing authentication challenge.
+    
+    Per tor-spec.txt section 4.3:
+    Challenge [32 bytes]
+    N_Methods [2 bytes]
+    Methods [N_Methods * 2 bytes]
+    """
     NUM = 130
 
     def __init__(self, auth, circuit_id=0):
@@ -1012,8 +1068,31 @@ class CellAuthChallenge(TorCell):
 
     @staticmethod
     def _deserialize_payload(payload, proto_version):
-        # TODO: implement parse
-        return {'auth': payload}
+        """
+        Parse the AUTH_CHALLENGE cell payload.
+        
+        Returns:
+            dict with 'challenge' and 'methods' keys
+        """
+        if len(payload) < 34:
+            return {'auth': payload}
+        
+        challenge = payload[:32]
+        n_methods = struct.unpack('!H', payload[32:34])[0]
+        offset = 34
+        
+        methods = []
+        for _ in range(n_methods):
+            if offset + 2 <= len(payload):
+                method = struct.unpack('!H', payload[offset:offset+2])[0]
+                methods.append(method)
+                offset += 2
+        
+        return {
+            'auth': payload,
+            'challenge': challenge,
+            'methods': methods
+        }
 
 
 class CellCreated(TorCell):
