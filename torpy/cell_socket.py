@@ -133,7 +133,8 @@ class TorCellSocket:
     def close(self):
         logger.debug('Close TorCellSocket to %s relay...', self._router)
         with self._send_close_lock:
-            self._socket.close()
+            if self._socket:
+                self._socket.close()
             self._socket = None
 
     def send_cell(self, cell):
@@ -149,7 +150,7 @@ class TorCellSocket:
     def recv_cell(self):
         while self._socket:
             self._next_len = self._next_len or next(self._cells_builder)
-            if len(self._data) < self._next_len:
+            if self._next_len and len(self._data) < self._next_len:
                 more_data = self._socket.recv(TorCellSocket.RECV_BUFF_SIZE)
                 self._data.extend(more_data)
 
@@ -159,13 +160,15 @@ class TorCellSocket:
             # Or read more data from socket
 
     def recv_cell_async(self):
+        if not self._socket:
+            return
         more_data = self._socket.recv(TorCellSocket.RECV_BUFF_SIZE)
         self._data.extend(more_data)
         self._next_len = self._next_len or next(self._cells_builder)
         yield from self._build_next_cell()
 
     def _build_next_cell(self):
-        while len(self._data) >= self._next_len:
+        while self._next_len is not None and len(self._data) >= self._next_len:
             send_buff = self._data[:self._next_len]
             self._data = self._data[self._next_len:]
 

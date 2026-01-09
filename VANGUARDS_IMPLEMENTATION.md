@@ -47,6 +47,7 @@ The implementation includes all major features from Proposal 292:
 ### VanguardNode
 
 **Enhanced with circuit tracking:**
+
 ```python
 class VanguardNode:
     router          # TOR router object
@@ -59,6 +60,7 @@ class VanguardNode:
 ```
 
 **New Methods:**
+
 - `has_required_flags()` - Check if node still has Fast/Stable/Running/Valid
 
 ### VanguardSet
@@ -66,19 +68,23 @@ class VanguardNode:
 **New Methods:**
 
 **Bandwidth Selection:**
+
 - `_parse_bandwidth(router)` - Extract bandwidth from `w` field
 - `_get_bandwidth_weight(router)` - Calculate selection weight
 - `_select_bandwidth_weighted(candidates, prefer_guard_flag)` - Weighted random selection
 
 **Rotation:**
+
 - `_generate_max_distribution_lifetime()` - max(X,X) distribution
 - `rotate(force_flag_check)` - Enhanced rotation with flag monitoring
 
 **Circuit Tracking:**
+
 - `mark_circuit_use(fingerprint, success)` - Track circuit usage
 - `get_node_by_fingerprint(fingerprint)` - Retrieve specific node
 
 **Enhanced Statistics:**
+
 - Now includes: `total_circuits`, `total_failures`, `failure_rate`
 - Per-node stats: `circuit_count`, `failed_count`, `bandwidth_kb`, `has_guard_flag`
 
@@ -87,19 +93,23 @@ class VanguardNode:
 **New Features:**
 
 **Circuit Purpose Support:**
+
 - `CircuitPurpose` class with 7 purpose types
 - `get_vanguard_path(purpose)` - Get nodes for specific purpose
 - Returns `needs_extra_hop` flag for linkability protection
 
 **Circuit Tracking:**
+
 - `mark_circuit_use(layer, fingerprint, purpose, success)` - Track usage
 - `_circuit_purposes` dict - Per-purpose usage statistics
 
 **Manual Control:**
+
 - `force_rotation(layer)` - Trigger immediate rotation
 - Layer-specific or full rotation support
 
 **Enhanced Rotation:**
+
 - Periodic flag checking (hourly)
 - Automatic replacement on flag loss
 
@@ -133,6 +143,7 @@ class CircuitPurpose:
 ```
 
 **Extra Middle Hop Required:**
+
 - `CLIENT_INTRO`, `CLIENT_HSDIR`: Prevents linkability between client and HS
 - `SERVICE_REND`, `SERVICE_INTRO`, `SERVICE_HSDIR`: Additional protection for services
 
@@ -199,6 +210,7 @@ def generate_lifetime():
 | max(X,X) | ~66% of range | Toward max |
 
 **Example (Layer 2):**
+
 - Range: 30-60 days (midpoint = 45 days)
 - Uniform: Average ≈ 45 days
 - max(X,X): Average ≈ 52 days (15% longer)
@@ -214,6 +226,7 @@ def generate_lifetime():
 ### Required Flags
 
 Vanguards must maintain:
+
 - `Fast`: High bandwidth (top 7/8 of network)
 - `Stable`: High uptime (MTBF > median)
 - `Running`: Currently reachable
@@ -383,6 +396,7 @@ python examples/vanguards_example.py
 ```
 
 **Test Coverage:**
+
 - Bandwidth parsing and weighted selection
 - max(X,X) distribution properties
 - Flag-based replacement logic
@@ -432,6 +446,7 @@ python examples/vanguards_example.py
 - **Status**: Official Tor implementation (0.4.7+)
 
 **Why Proposal 292?**
+
 - Maximum security for critical hidden services
 - Better protection against sophisticated adversaries
 - More research and analysis available
@@ -537,6 +552,7 @@ python examples/vanguards_example.py
 ```
 
 Expected features demonstrated:
+
 - ✅ Bandwidth-weighted selection with Guard preference
 - ✅ max(X,X) distribution for longer lifetimes
 - ✅ Flag-based replacement on rotation
