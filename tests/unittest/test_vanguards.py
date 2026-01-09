@@ -414,8 +414,9 @@ class TestVanguardIntegration(unittest.TestCase):
         self.assertIsNotNone(l3)
         
         # Track usage
-        manager.mark_circuit_use(VanguardLayer.LAYER2, l2.fingerprint,
-                                purpose=CircuitPurpose.CLIENT_REND)
+        if l2 is not None:
+            manager.mark_circuit_use(VanguardLayer.LAYER2, l2.fingerprint,
+                                    purpose=CircuitPurpose.CLIENT_REND)
         
         # Get stats
         stats = manager.get_stats()
