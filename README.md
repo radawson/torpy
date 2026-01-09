@@ -251,30 +251,54 @@ Available algorithms:
 
 ### Vanguards (Hidden Service Protection)
 
-Protect hidden services from guard discovery attacks:
+Protect hidden services from guard discovery attacks. Full Proposal 292 implementation with bandwidth-weighted selection, circuit tracking, and automatic rotation:
+
 ```python
 from torpy import TorClient
-from torpy.vanguards import VanguardManager
+from torpy.vanguards import VanguardManager, CircuitPurpose
 
-consensus = tor_client.get_consensus()
-vanguards = VanguardManager(consensus)
-
-# Enable vanguards (initializes Layer 2 and Layer 3 guards)
-vanguards.enable()
-
-# Get a Layer 2 vanguard node for circuit building
-layer2_node = vanguards.get_layer2_node()
-layer3_node = vanguards.get_layer3_node()
-
-# View statistics
-stats = vanguards.get_stats()
-print(f"Layer 2: {stats['layer2']['node_count']} nodes")
-print(f"Layer 3: {stats['layer3']['node_count']} nodes")
-
-# Vanguards will automatically rotate expired nodes
-# When done:
-vanguards.disable()
+with TorClient() as tor:
+    consensus = tor.get_consensus()
+    
+    # Use context manager for automatic cleanup
+    with VanguardManager(consensus) as vanguards:
+        # Vanguards automatically initialized with:
+        # - Bandwidth-weighted node selection
+        # - max(X,X) rotation distribution
+        # - Automatic flag monitoring
+        
+        # Get vanguard path for specific circuit purpose
+        path = vanguards.get_vanguard_path(CircuitPurpose.CLIENT_REND)
+        layer2_node = path['layer2']  # 8-16 nodes, 30-60 day lifetime
+        layer3_node = path['layer3']  # 16-32 nodes, 7-14 day lifetime
+        needs_extra_hop = path['needs_extra_hop']  # True for intro/hsdir circuits
+        
+        # Track circuit usage
+        from torpy.vanguards import VanguardLayer
+        vanguards.mark_circuit_use(
+            VanguardLayer.LAYER2,
+            layer2_node.fingerprint,
+            purpose=CircuitPurpose.CLIENT_REND,
+            success=True
+        )
+        
+        # Get comprehensive statistics
+        stats = vanguards.get_stats()
+        print(f"Layer 2: {stats['layer2']['node_count']} nodes, "
+              f"{stats['layer2']['total_circuits']} circuits")
+        print(f"Layer 3: {stats['layer3']['node_count']} nodes")
+        print(f"Circuit purposes: {stats['circuit_purposes']}")
+        
+        # Manually trigger rotation with flag check
+        vanguards.force_rotation()
 ```
+
+**Features:**
+- **Bandwidth-weighted selection**: Prefers high-bandwidth Guard-flagged nodes
+- **max(X,X) distribution**: Rotation times skewed toward longer lifetimes
+- **Flag-based replacement**: Automatically removes nodes that lose Fast/Stable flags
+- **Circuit tracking**: Monitors usage and failures per vanguard
+- **Purpose-aware paths**: Different topologies for rendezvous/intro/HSDir circuits
 
 
 Installation
@@ -296,7 +320,7 @@ TODO
 - [x] ~~Certificate validation~~ **DONE!** (CERTS cell parsing and validation)
 - [x] ~~Shared Random Value (SRV) extraction~~ **DONE!** (from consensus for v3 HSDir selection)
 - [x] ~~Conflux implementation~~ **DONE!** (full Proposal 329 with AIMD, sequencing, health monitoring)
-- [x] ~~Vanguards implementation~~ **DONE!** (Layer 2/3 guard discovery protection)
+- [x] ~~Vanguards implementation~~ **DONE!** (Full Proposal 292: bandwidth-weighted selection, circuit tracking)
 - [x] ~~More unit tests~~ **DONE!** (80+ tests for cells and v3 hidden services)
 - [ ] Refactor Tor cells serialization/deserialization
 - [ ] Rewrite the library using asyncio
