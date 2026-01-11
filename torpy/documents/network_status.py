@@ -211,12 +211,29 @@ class Router:
         return self._consensus.get_descriptor(self._fingerprint)
 
     @property
+    def has_cached_descriptor(self):
+        """Check if descriptor is already cached without triggering a fetch."""
+        return 'descriptor' in self.__dict__
+
+    @property
     def ed25519_identity(self):
         """Get the 32-byte Ed25519 identity key from the router's descriptor.
         
         This is required for v3 onion service HSDir selection per rend-spec-v3.
+        Note: This will fetch the descriptor if not already cached.
         """
         if self.descriptor and self.descriptor.master_key_ed25519:
+            return self.descriptor.master_key_ed25519
+        return None
+
+    @property
+    def ed25519_identity_if_cached(self):
+        """Get Ed25519 identity only if descriptor is already cached.
+        
+        Returns None if descriptor hasn't been fetched yet.
+        This avoids triggering expensive descriptor fetches.
+        """
+        if self.has_cached_descriptor and self.descriptor and self.descriptor.master_key_ed25519:
             return self.descriptor.master_key_ed25519
         return None
 
