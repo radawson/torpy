@@ -183,14 +183,15 @@ def _derive_blind_factor(identity_pubkey: bytes, time_period_num: int,
     """
     Derive the blinding factor for a given time period.
     
-    Per rend-spec-v3 section 2.2:
+    Per rend-spec-v3 Appendix A (KEYBLIND):
     h = H(BLIND_STRING | A | s | B | N)
     
     Where:
+    - BLIND_STRING = "Derive temporary signing key" | INT_1(0)
     - A is the Ed25519 identity public key
     - s is a secret (empty for public derivation)
-    - B is the Ed25519 basepoint (encoded, but we include period info)
-    - N is the nonce (usually includes time period)
+    - B is the Ed25519 basepoint as a string
+    - N = "key-blind" | INT_8(period-number) | INT_8(period_length_in_minutes)
     
     Args:
         identity_pubkey: 32-byte Ed25519 public key
@@ -198,24 +199,36 @@ def _derive_blind_factor(identity_pubkey: bytes, time_period_num: int,
         nonce: Optional additional nonce data
         
     Returns:
-        bytes: 32-byte blinding factor
+        bytes: 32-byte blinding factor (clamped)
     """
-    # Build the param string: N = int64(period_num) || int64(period_length) || nonce
-    period_info = struct.pack(">QQ", time_period_num, TIME_PERIOD_LENGTH) + nonce
+    # Per spec Appendix A:
+    # BLIND_STRING = "Derive temporary signing key" | INT_1(0)
+    blind_string = b"Derive temporary signing key" + bytes([0])
     
-    # H(BLIND_STRING | A | s | B | N)
-    # For public derivation, s is empty
-    # B is represented implicitly through the protocol
-    blind_input = BLIND_STRING + identity_pubkey + period_info
+    # B = the Ed25519 basepoint as a string representation
+    # From spec: B = "(1511[...]2202, 4631[...]5960)"
+    basepoint_str = (
+        b"(15112221349535400772501151409588531511454012693041857206046113283949847762202, "
+        b"46316835694926478169428394003475163141307993866256225615783033603165251855960)"
+    )
+    
+    # N = "key-blind" | INT_8(period-number) | INT_8(period_length_in_minutes)
+    # Per spec section 2.2.1, period_length is in MINUTES (1440), not seconds
+    period_length_minutes = TIME_PERIOD_LENGTH // 60  # 1440
+    N = b"key-blind" + struct.pack(">QQ", time_period_num, period_length_minutes) + nonce
+    
+    # s is empty for public derivation (no secret)
+    s = b""
+    
+    # h = H(BLIND_STRING | A | s | B | N)
+    blind_input = blind_string + identity_pubkey + s + basepoint_str + N
     
     h = sha3_256(blind_input)
     
-    # Reduce modulo the Ed25519 base point order
-    # and clamp to ensure valid scalar
-    h_int = int.from_bytes(h, 'little') % ED25519_BASEPOINT_ORDER
-    blind_factor = h_int.to_bytes(32, 'little')
+    # Clamp the blinding factor per ed25519 spec
+    h = _clamp_ed25519_scalar(h)
     
-    return blind_factor
+    return h
 
 
 def derive_blinded_pubkey(identity_pubkey: bytes, time_period_num: int,
