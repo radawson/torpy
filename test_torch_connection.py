@@ -32,10 +32,13 @@ def test_basic_connection():
     logger.info("="*60)
     
     try:
+        logger.info("Initializing TorClient (this may take 30-60 seconds)...")
         with TorClient() as tor:
+            logger.info("✓ TorClient initialized successfully")
+            
             with TorRequests(tor) as tor_requests:
                 logger.info(f"Connecting to: {TORCH_ONION}")
-                logger.info("This may take 30-60 seconds for first connection...")
+                logger.info("Establishing hidden service connection...")
                 
                 response = tor_requests.get(TORCH_ONION, timeout=120)
                 

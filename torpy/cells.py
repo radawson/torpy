@@ -1059,9 +1059,11 @@ class CellAuthChallenge(TorCell):
     """
     NUM = 130
 
-    def __init__(self, auth, circuit_id=0):
+    def __init__(self, auth, challenge=None, methods=None, circuit_id=0):
         super().__init__(circuit_id)
         self.auth = auth
+        self.challenge = challenge if challenge is not None else auth[:32] if len(auth) >= 32 else auth
+        self.methods = methods if methods is not None else []
 
     def _serialize_payload(self):
         raise NotImplementedError('CellAuthChallenge serialization not implemented')
