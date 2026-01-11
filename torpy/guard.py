@@ -114,7 +114,11 @@ class TorGuard:
 
     @cell_to_circuit
     def _on_destroy(self, cell, circuit):
-        logger.info('On destroy: circuit #%x', cell.circuit_id)
+        cell_type = type(cell).__name__
+        logger.warning('Received %s for circuit #%x - circuit being destroyed by relay', 
+                      cell_type, cell.circuit_id)
+        if hasattr(cell, 'reason'):
+            logger.warning('  Destroy reason: %s', cell.reason)
         send_destroy = isinstance(cell, CellRelayTruncated)
         self.destroy_circuit(circuit, send_destroy=send_destroy)
 

@@ -36,9 +36,12 @@ class HttpStreamClient:
             headers['Host'] = host
         headers_str = '\r\n'.join(f'{key}: {val}' for (key, val) in headers.items())
         http_query = f'GET {path} HTTP/1.0\r\n{headers_str}\r\n\r\n'
+        logger.debug('Sending HTTP request: GET %s', path)
         self._stream.send(http_query.encode())
 
+        logger.debug('Receiving HTTP response...')
         raw_response = recv_all(self._stream)
+        logger.debug('Received %d bytes', len(raw_response))
         header, body = raw_response.split(b'\r\n\r\n', 1)
 
         f = BytesIO(header)
