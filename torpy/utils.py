@@ -63,10 +63,18 @@ class cached_property:  # noqa: N801
 
 
 def log_retry(exc_info, msg, no_traceback=None):
-    if no_traceback is not None and exc_info[0] not in no_traceback:
-        logging.error('[ignored]', exc_info=exc_info[1])
+    # Check if this is an expected exception type that shouldn't show traceback
+    show_traceback = True
+    if no_traceback is not None:
+        for exc_type in no_traceback:
+            if isinstance(exc_info[1], exc_type):
+                show_traceback = False
+                break
+    
+    if show_traceback:
+        logger.warning('[ignored] %s.%s: %s', exc_info[0].__module__, exc_info[0].__qualname__, str(exc_info[1]))
     else:
-        logger.error('[ignored] %s.%s: %s', exc_info[0].__module__, exc_info[0].__qualname__, str(exc_info[1]))
+        logger.debug('[ignored] %s.%s: %s', exc_info[0].__module__, exc_info[0].__qualname__, str(exc_info[1]))
     logger.warning(msg)
 
 

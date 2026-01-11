@@ -28,6 +28,7 @@ from typing import List
 from torpy.utils import retry, log_retry
 from torpy.documents import TorDocumentsFactory
 from torpy.guard import TorGuard
+from torpy.cell_socket import TorSocketConnectError
 from torpy.parsers import RouterDescriptorParser
 from torpy.cache_storage import TorCacheDirStorage
 from torpy.crypto_common import rsa_verify, rsa_load_der, sha3_256, b64decode
@@ -225,7 +226,8 @@ class TorConsensus:
             self._dir_guard.close()
 
     @retry(5, BaseException, delay=1, backoff=2,
-           log_func=functools.partial(log_retry, msg='Retry with another router...', no_traceback=(socket.timeout,)))
+           log_func=functools.partial(log_retry, msg='Retry with another router...', 
+                                      no_traceback=(socket.timeout, TimeoutError, TorSocketConnectError)))
     def renew(self, force=False):
         with self._lock:
             if not force and self._document and self._document.is_live:

@@ -123,7 +123,7 @@ class TorCellSocket:
             handshake = TorHandshake(self, self._protocol)
             handshake.initiate()
         except Exception as e:
-            logger.error('Handshake failed for relay %s:%d: %s', self._router.ip, self._router.or_port, e)
+            logger.warning('Handshake failed for relay %s:%d: %s', self._router.ip, self._router.or_port, e)
             raise TorSocketConnectError(e)
 
     @property
