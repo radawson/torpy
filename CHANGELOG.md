@@ -39,11 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tests for protocol version support
 
 ### Changed
+
 - Updated `TorProtocol.SUPPORTED_VERSION` to include version 5: `[3, 4, 5]`
 - Improved handshake to skip unknown cells during protocol negotiation
 - Enhanced error handling throughout cell socket communication
 
 ### Fixed
+
 - Fixed `AttributeError: module 'ssl' has no attribute 'wrap_socket'` on Python 3.12
 - Fixed `ValueError: check_hostname requires server_hostname` during TLS handshake
 - Fixed `Exception: Cell type (84) not found` crash on unknown cell types
@@ -51,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.6] - 2021-XX-XX
 
 ### Previous Releases
+
 See the [GitHub releases page](https://github.com/torpyorg/torpy/releases) for earlier version history.
 
 ---
@@ -67,6 +70,7 @@ See the [GitHub releases page](https://github.com/torpyorg/torpy/releases) for e
 ### Upgrading to Link Protocol 5
 
 No code changes required. The library automatically:
+
 1. Negotiates the highest mutually supported protocol version
 2. Handles padding negotiation for protocol v5 connections
 3. Falls back gracefully to v3/v4 when connecting to older relays
