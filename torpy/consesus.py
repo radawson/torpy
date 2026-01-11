@@ -353,8 +353,10 @@ class TorConsensus:
         return self.get_random_router(flags)
 
     def get_hsdirs(self):
-        flags = [RouterFlags.HSDir]
-        return self.get_routers(flags, has_dir_port=True)
+        # For v3 hidden services, HSDirs are contacted over OR port using BEGIN_DIR
+        # Routers with V2Dir flag support directory ops over ORPort without needing dir_port
+        flags = [RouterFlags.HSDir, RouterFlags.V2Dir]
+        return self.get_routers(flags, has_dir_port=False)
 
     def get_shared_random_value(self, use_previous=False):
         """
@@ -532,7 +534,9 @@ class TorConsensus:
         # For v3, HSDirs are sorted by their hs_index computed as:
         # hs_index = H("node-idx" | node_id | shared_random_value | INT_8(period) | INT_8(period_length))
 
-        TIME_PERIOD_LENGTH = 1440 * 60  # 24 hours in seconds
+        # Per rend-spec-v3.txt section 2.2.1 and 2.2.3:
+        # "period_length is the length of the time period in minutes"
+        TIME_PERIOD_LENGTH = 1440  # 24 hours in MINUTES (not seconds!)
 
         # Use SRV from consensus if not provided
         if shared_random_value is None:

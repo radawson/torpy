@@ -1,6 +1,6 @@
 import pytest
 
-from torpy.consesus import DirectoryServer, DirectoryFlags, RouterFlags
+from torpy.consensus import DirectoryServer, DirectoryFlags, RouterFlags
 
 
 @pytest.mark.parametrize(

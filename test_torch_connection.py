@@ -13,8 +13,8 @@ import logging
 from torpy import TorClient
 from torpy.http.requests import TorRequests
 
-# Torch hidden service
-TORCH_ONION = 'http://xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion'
+# DuckDuckGo v3 hidden service (known to be stable)
+TORCH_ONION = 'http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion'
 
 # Setup logging - use DEBUG level to see detailed protocol information
 logging.basicConfig(

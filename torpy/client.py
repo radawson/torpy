@@ -23,7 +23,7 @@ from torpy.guard import TorGuard
 from torpy.utils import retry, log_retry
 from torpy.circuit import TorCircuit
 from torpy.cell_socket import TorSocketConnectError
-from torpy.consesus import TorConsensus
+from torpy.consensus import TorConsensus
 from torpy.cache_storage import TorCacheDirStorage
 
 if TYPE_CHECKING:
