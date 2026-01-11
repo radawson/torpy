@@ -605,9 +605,13 @@ class TorConsensus:
         # Use SRV from consensus if not provided
         if shared_random_value is None:
             shared_random_value = self.get_shared_random_value()
-            if shared_random_value is None:
+            if shared_random_value:
+                logger.info("Using CURRENT SRV: %s", shared_random_value.hex()[:16] + "...")
+            else:
                 # Fallback to previous value
                 shared_random_value = self.get_shared_random_value(use_previous=True)
+                if shared_random_value:
+                    logger.info("Using PREVIOUS SRV: %s", shared_random_value.hex()[:16] + "...")
             if shared_random_value is None:
                 # Last resort fallback - use deterministic placeholder
                 logger.warning('No SRV in consensus, using placeholder')
