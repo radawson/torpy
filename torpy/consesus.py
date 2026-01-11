@@ -367,10 +367,16 @@ class TorConsensus:
             32-byte shared random value, or None if not available
         """
         doc = self.get_document()
+        if doc is None:
+            logger.debug('No consensus document available for SRV lookup')
+            return None
+        
+        # Access the document fields directly via __getattr__
+        # Field names use underscores (e.g., shared_rand_current_value)
         if use_previous:
-            srv_line = doc.data.get('shared_rand_previous_value')
+            srv_line = doc.shared_rand_previous_value
         else:
-            srv_line = doc.data.get('shared_rand_current_value')
+            srv_line = doc.shared_rand_current_value
         
         if not srv_line:
             logger.debug('No shared random value in consensus')

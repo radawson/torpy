@@ -35,15 +35,17 @@ def test_basic_connection():
     logger.info("="*60)
     
     try:
-        logger.info("Initializing TorClient (this may take 30-60 seconds)...")
-        with TorClient() as tor:
-            logger.info("✓ TorClient initialized successfully")
+        logger.info("Initializing TorRequests (this may take 30-60 seconds)...")
+        # TorRequests creates its own TorClient internally
+        with TorRequests(hops_count=3) as tor_requests:
+            logger.info("✓ TorRequests initialized successfully")
             
-            with TorRequests(tor) as tor_requests:
+            # Use get_session() to get a requests.Session with Tor routing
+            with tor_requests.get_session() as session:
                 logger.info(f"Connecting to: {TORCH_ONION}")
                 logger.info("Establishing hidden service connection...")
                 
-                response = tor_requests.get(TORCH_ONION, timeout=120)
+                response = session.get(TORCH_ONION, timeout=120)
                 
                 logger.info(f"✓ Connection successful!")
                 logger.info(f"  Status code: {response.status_code}")

@@ -80,14 +80,17 @@ class MyHTTPConnectionPool(HTTPConnectionPool):
         self.num_connections += 1
         logger.debug('[MyHTTPConnectionPool] new_conn %i', self.num_connections)
         circuit = self._tor_info.get_circuit(self.host)
-        return MyHTTPConnection(
-            circuit,
+        # Build kwargs, excluding 'strict' which was removed in newer urllib3
+        conn_kwargs = dict(
             host=self.host,
             port=self.port,
             timeout=self.timeout.connect_timeout,
-            strict=self.strict,
             **self.conn_kw,
         )
+        # Only add 'strict' if the connection pool has this attribute (older urllib3)
+        if hasattr(self, 'strict'):
+            conn_kwargs['strict'] = self.strict
+        return MyHTTPConnection(circuit, **conn_kwargs)
 
 
 class MyHTTPSConnectionPool(HTTPSConnectionPool):
@@ -99,14 +102,17 @@ class MyHTTPSConnectionPool(HTTPSConnectionPool):
         self.num_connections += 1
         logger.debug('[MyHTTPSConnectionPool] new_conn %i', self.num_connections)
         circuit = self._tor_info.get_circuit(self.host)
-        conn = MyHTTPSConnection(
-            circuit,
+        # Build kwargs, excluding 'strict' which was removed in newer urllib3
+        conn_kwargs = dict(
             host=self.host,
             port=self.port,
             timeout=self.timeout.connect_timeout,
-            strict=self.strict,
             **self.conn_kw,
         )
+        # Only add 'strict' if the connection pool has this attribute (older urllib3)
+        if hasattr(self, 'strict'):
+            conn_kwargs['strict'] = self.strict
+        conn = MyHTTPSConnection(circuit, **conn_kwargs)
         logger.debug('[MyHTTPSConnectionPool] preparing...')
         return self._prepare_conn(conn)
         # TODO: override close to close all circuits?

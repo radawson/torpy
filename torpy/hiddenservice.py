@@ -312,15 +312,14 @@ class HiddenServiceConnector:
             time_period_num = get_time_period_num()
             blinded_pubkey = hidden_service.get_blinded_pubkey(time_period_num)
             
-            # Get v3 responsible HSDirs (2 replicas, 4 HSDirs each)
-            for replica in range(2):
-                hsdir_list = self._consensus.get_responsibles_v3(
-                    blinded_pubkey,
-                    time_period_num,
-                    spread=4
-                )
-                for responsible_router in hsdir_list[:4]:  # 4 HSDirs per replica
-                    yield ResponsibleDir(responsible_router, replica, self._circuit, self._consensus)
+            # Get v3 responsible HSDirs (yields router, replica tuples)
+            # The generator handles 2 replicas internally, each with 4 HSDirs
+            for responsible_router, replica in self._consensus.get_responsibles_v3(
+                blinded_pubkey,
+                time_period_num,
+                spread=4
+            ):
+                yield ResponsibleDir(responsible_router, replica, self._circuit, self._consensus)
         else:
             # V2 hidden service - use v2 HSDir selection
             for i, responsible_router in enumerate(self._consensus.get_responsibles(hidden_service)):

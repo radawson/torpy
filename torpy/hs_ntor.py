@@ -224,14 +224,10 @@ def derive_blinded_pubkey(identity_pubkey: bytes, time_period_num: int,
     Derive the blinded public key for a v3 hidden service.
     
     Per rend-spec-v3 section 2.2:
-    A' = h * A  (point multiplication)
+    A' = h * A  (Ed25519 scalar point multiplication)
     
-    Note: This is a simplified implementation that uses hash-based derivation
-    since we don't have direct access to Ed25519 point operations in the
-    cryptography library. The actual TOR implementation uses point multiplication.
-    
-    For client-side descriptor lookups, we use the deterministic derivation
-    that matches what the hidden service publishes.
+    Uses PyNaCl's crypto_scalarmult_ed25519_noclamp for proper Ed25519
+    point multiplication.
     
     Args:
         identity_pubkey: 32-byte Ed25519 identity public key
@@ -241,23 +237,24 @@ def derive_blinded_pubkey(identity_pubkey: bytes, time_period_num: int,
     Returns:
         bytes: 32-byte blinded public key
     """
-    # For descriptor lookup, we derive the blinded key deterministically
-    # This matches the hidden service's published descriptor
+    try:
+        from nacl.bindings import crypto_scalarmult_ed25519_noclamp
+    except ImportError:
+        raise ImportError("PyNaCl is required for v3 hidden service blinded key derivation. "
+                          "Install it with: pip install pynacl")
     
-    # Build blinding parameters
-    period_info = struct.pack(">QQ", time_period_num, TIME_PERIOD_LENGTH) + nonce
+    # Derive the blinding factor
+    blind_factor = _derive_blind_factor(identity_pubkey, time_period_num, nonce)
     
-    # Derive blinded key using deterministic derivation
-    # H(identity_pubkey || "key-blind" || period_info)
-    blind_input = identity_pubkey + BLIND_PARAM_STR + period_info
-    blinded_key = sha3_256(blind_input)
+    # Perform Ed25519 scalar-point multiplication: A' = h * A
+    # This is the proper cryptographic operation per rend-spec-v3
+    try:
+        blinded_pubkey = crypto_scalarmult_ed25519_noclamp(blind_factor, identity_pubkey)
+    except Exception as e:
+        logger.error("Ed25519 scalar multiplication failed: %s", e)
+        raise ValueError(f"Invalid Ed25519 public key or blind factor: {e}")
     
-    # In the real TOR implementation, this would be:
-    # blinded_pubkey = blind_factor * identity_pubkey (Ed25519 point multiplication)
-    # Since we can't do point multiplication directly, we use a hash-based
-    # derivation that is compatible with the simplified lookup mechanism
-    
-    return blinded_key
+    return blinded_pubkey
 
 
 def get_hs_desc_index(blinded_pubkey: bytes, time_period_num: int, 

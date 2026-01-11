@@ -4,7 +4,7 @@
 #
 #    pip-compile setup.py
 #
-cffi==1.14.4              # via cryptography
+cffi>=2.0.0              # via cryptography
 cryptography>=3.4.4
 pycparser==2.20           # via cffi
 requests>=2.9.0           # for TorRequests HTTP adapter
