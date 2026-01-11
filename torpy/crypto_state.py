@@ -51,6 +51,9 @@ class CryptoState:
 
         self._forward_cipher = aes_ctr_encryptor(_ekey)
         self._backward_cipher = aes_ctr_decryptor(_dkey)
+        
+        # Track the last received cell's digest for SENDME authentication (proposal 289)
+        self._last_received_digest = b'\x00' * 20
 
     def _digesting_func(self, payload):
         self._forward_digest.update(payload)
@@ -73,7 +76,15 @@ class CryptoState:
             return False
 
         sha1_stream_update(self._backward_digest, payload)
+        # Store the full 20-byte digest for SENDME authentication (proposal 289)
+        # Clone the digest state to get the full 20 bytes
+        digest_for_sendme = sha1_stream_clone(self._backward_digest)
+        self._last_received_digest = sha1_stream_finalize(digest_for_sendme)[:20]
         return True
+    
+    def get_sendme_digest(self):
+        """Get the digest to include in authenticated SENDME cells (proposal 289)."""
+        return self._last_received_digest
 
     def _decrypting_func(self, payload):
         return aes_update(self._backward_cipher, payload)

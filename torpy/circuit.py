@@ -102,6 +102,10 @@ class CircuitNode:
     def decrypt_backward(self, relay_cell):
         self._crypto_state.decrypt_backward(relay_cell)
 
+    def get_sendme_digest(self):
+        """Get the digest for authenticated SENDME cells (proposal 289)."""
+        return self._crypto_state.get_sendme_digest()
+
 
 def cells_format(cell_types):
     if isinstance(cell_types, list):
@@ -480,7 +484,9 @@ class TorCircuit:
         if cell_type is CellRelayData:
             from_node.window.deliver_dec()
             if from_node.window.need_sendme():
-                self.send_relay(CellRelaySendMe(circuit_id=cell.circuit_id))
+                # Use authenticated SENDME with version=1 and digest (proposal 289)
+                sendme_digest = from_node.get_sendme_digest()
+                self.send_relay(CellRelaySendMe(version=1, digest=sendme_digest, circuit_id=cell.circuit_id))
         return False
 
     def _on_truncated(self, cell, from_node, orig_cell):

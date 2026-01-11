@@ -196,7 +196,9 @@ class TorStream:
             self._window.deliver_dec()
             if self._window.need_sendme():
                 logger.debug('Stream #%i: sending SENDME (window needs replenishment)', self.id)
-                self.send_relay(CellRelaySendMe(circuit_id=cell.circuit_id))
+                # Use authenticated SENDME with version=1 and digest (proposal 289)
+                sendme_digest = self._circuit.last_node.get_sendme_digest()
+                self.send_relay(CellRelaySendMe(version=1, digest=sendme_digest, circuit_id=cell.circuit_id))
             self._call_received()
         elif isinstance(cell, CellRelaySendMe):
             logger.debug('Stream #%i: sendme received', self.id)
@@ -312,7 +314,9 @@ class TorStream:
         self.send_relay(CellRelayEnd(StreamReason.DONE, self._circuit.id))
 
     def send_sendme(self):
-        self.send_relay(CellRelaySendMe(circuit_id=self._circuit.id))
+        # Use authenticated SENDME with version=1 and digest (proposal 289)
+        sendme_digest = self._circuit.last_node.get_sendme_digest()
+        self.send_relay(CellRelaySendMe(version=1, digest=sendme_digest, circuit_id=self._circuit.id))
 
     def _end(self, cell_end):
         logger.info('Stream #%i: remote disconnected (reason = %s)', self.id, cell_end.reason.name)
