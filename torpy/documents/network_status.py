@@ -211,6 +211,16 @@ class Router:
         return self._consensus.get_descriptor(self._fingerprint)
 
     @property
+    def ed25519_identity(self):
+        """Get the 32-byte Ed25519 identity key from the router's descriptor.
+        
+        This is required for v3 onion service HSDir selection per rend-spec-v3.
+        """
+        if self.descriptor and self.descriptor.master_key_ed25519:
+            return self.descriptor.master_key_ed25519
+        return None
+
+    @property
     def service_key(self):
         return self._service_key
 

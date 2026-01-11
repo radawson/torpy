@@ -160,10 +160,11 @@ class DirectoryList:
 
 
 class Descriptor:
-    def __init__(self, onion_key, signing_key, ntor_key):
+    def __init__(self, onion_key, signing_key, ntor_key, master_key_ed25519=None):
         self._onion_key = onion_key
         self._signing_key = signing_key
         self._ntor_key = ntor_key
+        self._master_key_ed25519 = master_key_ed25519
 
     @property
     def onion_key(self):
@@ -176,6 +177,11 @@ class Descriptor:
     @property
     def ntor_key(self):
         return self._ntor_key
+
+    @property
+    def master_key_ed25519(self):
+        """32-byte Ed25519 identity key from the router descriptor."""
+        return self._master_key_ed25519
 
 
 def expire_dir_guard_on_error():
@@ -552,10 +558,14 @@ class TorConsensus:
         # Compute node indices for all HSDirs
         indexed_routers = []
         for router in hsdir_router_list:
-            # node_id is the router's identity (fingerprint)
-            node_id = router.fingerprint
-            if isinstance(node_id, str):
-                node_id = bytes.fromhex(node_id)
+            # Per rend-spec-v3.txt section 2.2.3:
+            # "node_identity is the ed25519 identity key of the node" (32 bytes)
+            # NOT the RSA fingerprint (20 bytes)!
+            node_id = router.ed25519_identity
+            if node_id is None:
+                # Skip HSDirs without Ed25519 identity - they can't be used for v3
+                logger.debug("Skipping HSDir %s - no Ed25519 identity", router)
+                continue
 
             # Compute hs_index for this node
             index_input = (

@@ -57,11 +57,26 @@ ntor-onion-key (?P<ntor_key>[^\n]+)""",
         flags=re.DOTALL | re.IGNORECASE,
     )
 
+    # Extract master-key-ed25519 (base64-encoded 32-byte Ed25519 identity key)
+    master_key_regex = re.compile(r'^master-key-ed25519\s+([A-Za-z0-9+/]+)', re.MULTILINE)
+
     @staticmethod
     def parse(data):
         m = __class__.regex.search(data)
         if m:
-            return {k: b64decode(v) for k, v in m.groupdict().items()}
+            result = {k: b64decode(v) for k, v in m.groupdict().items()}
+            # Extract Ed25519 master key if present
+            mk_match = __class__.master_key_regex.search(data)
+            if mk_match:
+                # Add padding if needed (Tor strips trailing =)
+                key_b64 = mk_match.group(1)
+                padding = 4 - (len(key_b64) % 4)
+                if padding != 4:
+                    key_b64 += '=' * padding
+                result['master_key_ed25519'] = b64decode(key_b64)
+            else:
+                result['master_key_ed25519'] = None
+            return result
         else:
             logger.debug("Can't parse router descriptor: %r", data)
             raise Exception("Can't parse router descriptor")
