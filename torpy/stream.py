@@ -154,7 +154,8 @@ class TorStream:
         self._received_callbacks = []
 
         self._conn_timeout = 30
-        self._recv_timeout = 60
+        # Increased to 120s to handle slow consensus downloads
+        self._recv_timeout = 120
 
         self._state = StreamState.Closed
         self._close_lock = threading.Lock()

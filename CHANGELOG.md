@@ -16,8 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - V3 HSDir selection algorithm
   - New relay cells: `CellRelayIntroduce1V3`, `CellRelayIntroduce2`, `CellRelayRendezvous1`
   - Comprehensive test suite (33 tests for v3 hidden services)
+- **Conflux (Proposal 329)**: Full multipath circuit support
+  - AIMD congestion control with sequence tracking
+  - 4 traffic distribution algorithms (ROUND_ROBIN, WEIGHTED, LOWEST_LATENCY, MIN_RTT_CWND)
+  - Circuit health monitoring with automatic failover
+  - Out-of-order packet buffering and reordering
+- **Vanguards (Proposal 292)**: Hidden service guard discovery protection
+  - Bandwidth-weighted node selection from consensus
+  - max(X,X) rotation distribution for longer lifetimes
+  - Flag-based node replacement (Fast/Stable/Running/Valid monitoring)
+  - Circuit usage tracking and statistics
+  - 7 circuit purpose types with path differentiation
 - **Link Protocol 5 Support**: Full implementation of TOR Link Protocol version 5
-  - Added `CellPaddingNegotiate` (NUM=12) for link padding negotiation
+  - Added `CellPaddingNegotiate` (NUM=84) for connection padding negotiation
   - Added `CellVPadding` (NUM=128) for variable-length padding
   - Padding negotiation in handshake automatically disables link padding for performance
 - **New Cell Types**: Complete implementation of missing cell types
@@ -28,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `CellUnknown` class provides a generic handler for unknown cells
   - Prevents crashes when connecting to relays using newer protocol features
   - Logs warnings for unknown cell types instead of raising exceptions
+
+### Fixed
+- **CellAuthChallenge deserialization**: Fixed parameter mismatch in `__init__()` causing handshake failures
+- **Guard connection retry**: Improved error handling for connection timeouts and handshake failures
+  - Changed error logging from ERROR to WARNING/DEBUG for expected failures
+  - Added `TorSocketConnectError` and `TimeoutError` to expected exceptions list
+  - Reduced noise in logs during guard selection retry process
+- **Consensus download timeout**: Increased stream recv timeout from 60s to 120s to handle slow directory downloads
 - **Python 3.12 Compatibility**: Full support for Python 3.12
   - Replaced deprecated `ssl.wrap_socket()` with `SSLContext.wrap_socket()`
   - Fixed SSL context configuration for TOR connections

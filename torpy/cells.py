@@ -1279,6 +1279,7 @@ class TorCommands:
         CellAuthChallenge.NUM: CellAuthChallenge,   # 130
         CellAuthenticate.NUM: CellAuthenticate,     # 131
         CellAuthorize.NUM: CellAuthorize,           # 132
+        CellPaddingNegotiate.NUM: CellPaddingNegotiate,  # 84
         # fmt: on
     }
 
