@@ -118,7 +118,20 @@ class TorGuard:
         logger.warning('Received %s for circuit #%x - circuit being destroyed by relay', 
                       cell_type, cell.circuit_id)
         if hasattr(cell, 'reason'):
-            logger.warning('  Destroy reason: %s', cell.reason)
+            # Map reason code to name for better debugging
+            from torpy.cells import CircuitReason
+            try:
+                reason_name = CircuitReason(cell.reason).name
+            except ValueError:
+                reason_name = 'UNKNOWN'
+            logger.warning('  Destroy reason: %s (%s)', cell.reason, reason_name)
+        # Get stream info from circuit
+        stream_ids = []
+        if hasattr(circuit, '_streams') and hasattr(circuit._streams, '_stream_map'):
+            stream_ids = list(circuit._streams._stream_map.keys())
+        logger.warning('  Circuit state at destroy: %d nodes, streams=%s', 
+                      len(circuit._circuit_nodes) if hasattr(circuit, '_circuit_nodes') else 0,
+                      stream_ids)
         send_destroy = isinstance(cell, CellRelayTruncated)
         self.destroy_circuit(circuit, send_destroy=send_destroy)
 

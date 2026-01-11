@@ -365,8 +365,11 @@ class TorCircuit:
         return self._guard.create_circuit(hops_count, extend_routers)
 
     def create_dir_client(self):
+        logger.debug('Creating directory client on circuit #%x...', self.id)
         stream = self.create_stream()
+        logger.debug('Directory stream #%d created, connecting...', stream.id)
         stream.connect_dir()
+        logger.debug('Directory stream #%d connected, returning HttpStreamClient', stream.id)
         return HttpStreamClient(stream, host=self.last_node.router.ip)
 
     def destroy(self, send_destroy=True):

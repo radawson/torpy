@@ -195,6 +195,7 @@ class TorStream:
             self._append(cell.data)
             self._window.deliver_dec()
             if self._window.need_sendme():
+                logger.debug('Stream #%i: sending SENDME (window needs replenishment)', self.id)
                 self.send_relay(CellRelaySendMe(circuit_id=cell.circuit_id))
             self._call_received()
         elif isinstance(cell, CellRelaySendMe):

@@ -81,7 +81,11 @@ class CryptoState:
     def encrypt_forward(self, relay_cell):
         if not relay_cell.digest:
             relay_cell.prepare(self._digesting_func)
+            logger.debug('Relay cell prepared: digest=%s, stream_id=%d, inner_cell=%s',
+                        to_hex(relay_cell.digest), relay_cell.stream_id,
+                        type(relay_cell._inner_cell).__name__)
         relay_cell.encrypt(self._encrypting_func)
+        logger.debug('Relay cell encrypted: %d bytes', len(relay_cell._encrypted) if relay_cell._encrypted else 0)
 
     def decrypt_backward(self, relay_cell):
         # tor ref: relay_decrypt_cell

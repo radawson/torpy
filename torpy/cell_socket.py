@@ -26,7 +26,7 @@ from torpy.cells import (
     TorCell, CellCerts, CellNetInfo, TorCommands, CellVersions,
     CellAuthChallenge, CellPaddingNegotiate
 )
-from torpy.utils import coro_recv_exact
+from torpy.utils import coro_recv_exact, to_hex
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +140,9 @@ class TorCellSocket:
     def send_cell(self, cell):
         logger.debug('Cell send: %r', cell)
         buffer = self._protocol.serialize(cell)
+        # Debug: log raw bytes being sent
+        logger.debug('RAW SEND [%d bytes]: %s...', len(buffer), to_hex(buffer[:64]))
         with self._send_close_lock:
-            # verbose: logger.debug('send to socket: %s', to_hex(buffer))
             if self._socket:
                 self._socket.write(buffer)
             else:
@@ -152,6 +153,9 @@ class TorCellSocket:
             self._next_len = self._next_len or next(self._cells_builder)
             if self._next_len and len(self._data) < self._next_len:
                 more_data = self._socket.recv(TorCellSocket.RECV_BUFF_SIZE)
+                # Debug: log raw bytes received
+                if more_data:
+                    logger.debug('RAW RECV [%d bytes]: %s...', len(more_data), to_hex(more_data[:64]))
                 self._data.extend(more_data)
 
             for cell in self._build_next_cell():
@@ -185,8 +189,9 @@ class TorCellSocket:
             circuit_id, command_num = yield from self._read_by_format(self._protocol.header_format)
             cell_type = TorCommands.get_by_num(command_num)
             payload = yield from self._read_command_payload(cell_type)
-            # logger.debug("recv from socket: circuit_id = %x, command = %s,\n"
-            #              "payload = %s", circuit_id, cell_type.__name__, to_hex(payload))
+            logger.debug('CELL RECV: circuit_id=%x, command=%s (%d), payload[:%d]=%s',
+                        circuit_id, cell_type.__name__, command_num, 
+                        min(32, len(payload)), to_hex(payload[:32]))
             cell = self._protocol.deserialize(cell_type, payload, circuit_id)
             yield None
             yield cell
@@ -269,18 +274,22 @@ class TorHandshake:
         # initiator behaves differently depending on whether it wants to
         # authenticate or not. If it does not want to authenticate, it MUST
         # send a NET_INFO cell.
+        logger.info('HANDSHAKE: Starting link protocol negotiation...')
         self._send_versions()
         self.tor_protocol.version = self._retrieve_versions()
+        logger.info('HANDSHAKE: Negotiated link protocol version: %d', self.tor_protocol.version)
 
         self._retrieve_certs()
 
         self._retrieve_net_info()
         self._send_net_info()
+        logger.info('HANDSHAKE: NET_INFO exchange complete')
 
         # Link protocol 5 adds support for link padding negotiation
         # See padding-spec.txt for details
         if self.tor_protocol.version >= 5:
             self._negotiate_padding()
+            logger.info('HANDSHAKE: Link protocol 5 padding negotiation complete')
 
     def _send_versions(self):
         """

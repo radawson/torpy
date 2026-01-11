@@ -281,7 +281,6 @@ class RelayedTorCell(TorCell):
             return self._encrypted
         else:
             relay_payload = self._inner_cell._serialize_payload()
-            # logger.debug('relay_payload: %s', to_hex(relay_payload))
 
             payload_bytes = struct.pack('!B', self._inner_cell.NUM)
             payload_bytes += struct.pack('!H', 0)  # 'recognized'
@@ -296,6 +295,7 @@ class RelayedTorCell(TorCell):
             assert len(relay_payload) + len(self._padding) <= RelayedTorCell.MAX_PAYLOD_SIZE, 'wrong relay payload size'
             payload_bytes += struct.pack('!H', len(relay_payload))
             payload_bytes += struct.pack('!{}s'.format(RelayedTorCell.MAX_PAYLOD_SIZE), relay_payload + self._padding)
+            # Debug: log relay cell structure before encryption\n            logger.debug('RELAY CELL: cmd=%d (%s), recognized=0, stream_id=%d, digest=%s, len=%d',\n                        self._inner_cell.NUM, type(self._inner_cell).__name__,\n                        self._stream_id, to_hex(self._digest) if self._digest else 'None',\n                        len(relay_payload))
             return payload_bytes
 
     def get_encrypted(self):
@@ -1279,7 +1279,7 @@ class TorCommands:
         CellAuthChallenge.NUM: CellAuthChallenge,   # 130
         CellAuthenticate.NUM: CellAuthenticate,     # 131
         CellAuthorize.NUM: CellAuthorize,           # 132
-        CellPaddingNegotiate.NUM: CellPaddingNegotiate,  # 84
+        # Note: CellPaddingNegotiate.NUM (12) is already registered above for Link protocol 5
         # fmt: on
     }
 

@@ -16,12 +16,15 @@ from torpy.http.requests import TorRequests
 # Torch hidden service
 TORCH_ONION = 'http://xmh57jrknzkhv6y3ls3ubitzfqnkrwxhopf5aygthi7d6rplyvk3noyd.onion'
 
-# Setup logging
+# Setup logging - use DEBUG level to see detailed protocol information
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG to capture protocol details
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%H:%M:%S'
 )
+# Reduce noise from some modules but keep torpy at DEBUG
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
