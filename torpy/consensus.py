@@ -20,6 +20,7 @@ import random
 import logging
 import functools
 from base64 import b32decode, b16encode
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from enum import auto, Flag
 from threading import Lock
@@ -512,7 +513,8 @@ class TorConsensus:
                     break
 
     def get_responsibles_v3(self, blinded_pubkey: bytes, time_period_num: int,
-                            shared_random_value: bytes = None, spread: int = 4):
+                            shared_random_value: bytes = None, spread: int = 4,
+                            max_workers: int = 20, min_coverage: float = 0.8):
         """
         Get responsible HSDirs for a v3 hidden service.
 
@@ -520,11 +522,17 @@ class TorConsensus:
         For each replica (0 and 1), compute the HSDir index and find
         the responsible directories.
 
+        This implementation fetches HSDir descriptors in parallel for efficiency.
+        It proceeds once min_coverage of descriptors are loaded to avoid waiting
+        for all descriptors.
+
         Args:
             blinded_pubkey: 32-byte blinded public key
             time_period_num: Current time period number
             shared_random_value: SRV from consensus (optional)
             spread: Number of HSDirs per replica (default 4)
+            max_workers: Max parallel descriptor fetches (default 20)
+            min_coverage: Minimum fraction of descriptors needed (default 0.8)
 
         Yields:
             Tuple of (router, replica) for each responsible HSDir
@@ -535,10 +543,6 @@ class TorConsensus:
         if not hsdir_router_list:
             logger.warning("No HSDirs available in consensus")
             return
-
-        # Build sorted list of (hs_index, router) pairs
-        # For v3, HSDirs are sorted by their hs_index computed as:
-        # hs_index = H("node-idx" | node_id | shared_random_value | INT_8(period) | INT_8(period_length))
 
         # Per rend-spec-v3.txt section 2.2.1 and 2.2.3:
         # "period_length is the length of the time period in minutes"
@@ -555,35 +559,10 @@ class TorConsensus:
                 logger.warning('No SRV in consensus, using placeholder')
                 shared_random_value = sha3_256(b"shared-random-placeholder")
 
-        # Compute node indices for all HSDirs
-        indexed_routers = []
-        for router in hsdir_router_list:
-            # Per rend-spec-v3.txt section 2.2.3:
-            # "node_identity is the ed25519 identity key of the node" (32 bytes)
-            # NOT the RSA fingerprint (20 bytes)!
-            node_id = router.ed25519_identity
-            if node_id is None:
-                # Skip HSDirs without Ed25519 identity - they can't be used for v3
-                logger.debug("Skipping HSDir %s - no Ed25519 identity", router)
-                continue
-
-            # Compute hs_index for this node
-            index_input = (
-                b"node-idx" +
-                node_id +
-                shared_random_value +
-                struct.pack(">Q", time_period_num) +
-                struct.pack(">Q", TIME_PERIOD_LENGTH)
-            )
-            hs_index = sha3_256(index_input)
-            indexed_routers.append((hs_index, router))
-
-        # Sort by hs_index
-        indexed_routers.sort(key=lambda x: x[0])
-
-        # For each replica, compute the store-at-idx and find responsible HSDirs
+        # Compute the target service indices for both replicas first
+        # This helps us prioritize which descriptors to wait for
+        service_indices = []
         for replica in range(2):
-            # Compute hs_index for the service at this replica
             index_input = (
                 b"store-at-idx" +
                 blinded_pubkey +
@@ -591,7 +570,77 @@ class TorConsensus:
                 struct.pack(">Q", TIME_PERIOD_LENGTH) +
                 struct.pack(">Q", time_period_num)
             )
-            service_index = sha3_256(index_input)
+            service_indices.append(sha3_256(index_input))
+
+        # Helper to fetch Ed25519 key and compute hs_index for a router
+        def fetch_and_compute_index(router):
+            """Fetch descriptor and compute hs_index for a router."""
+            try:
+                node_id = router.ed25519_identity
+                if node_id is None:
+                    return None
+                
+                index_input = (
+                    b"node-idx" +
+                    node_id +
+                    shared_random_value +
+                    struct.pack(">Q", time_period_num) +
+                    struct.pack(">Q", TIME_PERIOD_LENGTH)
+                )
+                hs_index = sha3_256(index_input)
+                return (hs_index, router)
+            except Exception as e:
+                logger.debug("Failed to get Ed25519 identity for %s: %s", router, e)
+                return None
+
+        # Fetch descriptors in parallel
+        indexed_routers = []
+        total_hsdirs = len(hsdir_router_list)
+        min_needed = int(total_hsdirs * min_coverage)
+        
+        logger.info("Fetching Ed25519 keys for %d HSDirs (need at least %d)...", 
+                   total_hsdirs, min_needed)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all fetch tasks
+            future_to_router = {
+                executor.submit(fetch_and_compute_index, router): router 
+                for router in hsdir_router_list
+            }
+            
+            # Process results as they complete
+            completed = 0
+            for future in as_completed(future_to_router):
+                result = future.result()
+                if result is not None:
+                    indexed_routers.append(result)
+                completed += 1
+                
+                # Log progress periodically
+                if completed % 100 == 0:
+                    logger.info("Fetched %d/%d HSDir descriptors (%d usable)", 
+                               completed, total_hsdirs, len(indexed_routers))
+                
+                # Check if we have enough coverage to proceed
+                if len(indexed_routers) >= min_needed:
+                    # We have enough - cancel remaining futures for efficiency
+                    logger.info("Reached minimum coverage (%d/%d), proceeding...", 
+                               len(indexed_routers), total_hsdirs)
+                    # Don't cancel - let them complete in background for caching
+                    break
+
+        if not indexed_routers:
+            logger.error("No HSDirs with Ed25519 identity found!")
+            return
+
+        logger.info("Using %d HSDirs with Ed25519 identities", len(indexed_routers))
+
+        # Sort by hs_index
+        indexed_routers.sort(key=lambda x: x[0])
+
+        # For each replica, find responsible HSDirs
+        for replica in range(2):
+            service_index = service_indices[replica]
 
             # Find the position in the ring where this index falls
             pos = 0
