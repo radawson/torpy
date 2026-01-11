@@ -30,7 +30,7 @@ from torpy.utils import retry, log_retry
 from torpy.documents import TorDocumentsFactory
 from torpy.guard import TorGuard
 from torpy.cell_socket import TorSocketConnectError
-from torpy.parsers import RouterDescriptorParser
+from torpy.parsers import RouterDescriptorParser, BulkDescriptorParser
 from torpy.cache_storage import TorCacheDirStorage
 from torpy.crypto_common import rsa_verify, rsa_load_der, sha3_256, b64decode
 from torpy.documents.network_status import RouterFlags, NetworkStatusDocument, FetchDescriptorError, Router
@@ -493,6 +493,61 @@ class TorConsensus:
         descriptor_info = RouterDescriptorParser.parse(response.decode())
         return Descriptor(**descriptor_info)
 
+    @retry(3, BaseException,
+           log_func=functools.partial(log_retry, msg='Retry downloading bulk descriptors...'))
+    @expire_dir_guard_on_error()
+    def download_all_descriptors_ed25519_map(self):
+        """
+        Download all router descriptors and extract fingerprint -> Ed25519 identity mapping.
+        
+        This downloads HSDirs in batches using /tor/server/fp/<F1>+<F2>+...
+        which is more reliable than downloading all at once.
+        
+        Returns:
+            Dict mapping fingerprint (bytes, 20 bytes) to ed25519_identity (bytes, 32 bytes)
+        """
+        hsdir_routers = self.get_hsdirs()
+        if not hsdir_routers:
+            logger.warning("No HSDirs in consensus")
+            return {}
+        
+        # Convert fingerprints to hex for URL
+        fingerprints = [r.fingerprint.hex().upper() for r in hsdir_routers]
+        
+        logger.info('Downloading descriptors for %d HSDirs in batches...', len(fingerprints))
+        
+        all_data = []
+        batch_size = 80  # Stay under URL length limits (96 max per Tor spec)
+        
+        for i in range(0, len(fingerprints), batch_size):
+            batch = fingerprints[i:i + batch_size]
+            batch_str = '+'.join(batch)
+            url = f'/tor/server/fp/{batch_str}.z'
+            
+            try:
+                with self._get_dir_client() as dir_client:
+                    status, response = dir_client.get(url)
+                if status == 200:
+                    all_data.append(response.decode('utf-8', errors='replace'))
+                    if (i // batch_size + 1) % 10 == 0:
+                        logger.info('  Batch %d/%d complete', 
+                                   i // batch_size + 1, 
+                                   (len(fingerprints) + batch_size - 1) // batch_size)
+                else:
+                    logger.warning("Batch %d returned status %d", i // batch_size, status)
+            except Exception as e:
+                logger.warning("Batch %d failed: %s", i // batch_size, e)
+                # Continue with other batches
+        
+        # Parse all collected data
+        combined_data = '\n'.join(all_data)
+        logger.info('Downloaded %d bytes of descriptors from %d batches', 
+                   len(combined_data), len(all_data))
+        
+        mapping = BulkDescriptorParser.parse_ed25519_mapping(combined_data)
+        logger.info('Parsed %d routers with Ed25519 identities', len(mapping))
+        return mapping
+
     def get_responsibles(self, hidden_service):
         """
         Get responsible dir for hidden service specified (v2).
@@ -513,8 +568,7 @@ class TorConsensus:
                     break
 
     def get_responsibles_v3(self, blinded_pubkey: bytes, time_period_num: int,
-                            shared_random_value: bytes = None, spread: int = 4,
-                            max_fetch: int = 100, min_hsdirs: int = 50):
+                            shared_random_value: bytes = None, spread: int = 4):
         """
         Get responsible HSDirs for a v3 hidden service.
 
@@ -522,29 +576,27 @@ class TorConsensus:
         For each replica (0 and 1), compute the HSDir index and find
         the responsible directories.
 
-        This implementation:
-        1. First uses routers with already-cached descriptors (fast)
-        2. If needed, fetches additional descriptors in parallel
-        3. Limits fetching to max_fetch descriptors to avoid slowdowns
+        This implementation downloads ALL router descriptors in bulk to get
+        Ed25519 identities, then indexes ALL HSDirs for correct DHT-style
+        selection. This matches how the real Tor client works.
 
         Args:
             blinded_pubkey: 32-byte blinded public key
             time_period_num: Current time period number
             shared_random_value: SRV from consensus (optional)
-            spread: Number of HSDirs per replica (default 4)
-            max_fetch: Maximum number of descriptors to fetch (default 100)
-            min_hsdirs: Minimum HSDirs needed for selection (default 50)
+            spread: Number of HSDirs per replica (default 4, per hsdir_spread_fetch)
 
         Yields:
             Tuple of (router, replica) for each responsible HSDir
         """
         import struct
-        import random
 
         hsdir_router_list = self.get_hsdirs()
         if not hsdir_router_list:
             logger.warning("No HSDirs available in consensus")
             return
+
+        logger.info("Found %d HSDirs in consensus", len(hsdir_router_list))
 
         # Per rend-spec-v3.txt section 2.2.1 and 2.2.3:
         # "period_length is the length of the time period in minutes"
@@ -572,8 +624,9 @@ class TorConsensus:
                 struct.pack(">Q", time_period_num)
             )
             service_indices.append(sha3_256(index_input))
+            logger.debug("Service index for replica %d: %s", replica, service_indices[replica].hex()[:16])
 
-        def compute_node_index(router, node_id):
+        def compute_node_index(node_id):
             """Compute node-idx for a router with known Ed25519 identity."""
             index_input = (
                 b"node-idx" +
@@ -584,80 +637,62 @@ class TorConsensus:
             )
             return sha3_256(index_input)
 
-        # Phase 1: Use routers with already-cached descriptors
+        # Download ALL descriptors in bulk to get Ed25519 identities
+        # This is the only way to correctly index all HSDirs for DHT selection
+        try:
+            ed25519_mapping = self.download_all_descriptors_ed25519_map()
+        except Exception as e:
+            logger.error("Failed to download bulk descriptors: %s", e)
+            return
+
+        # Index ALL HSDirs that we have Ed25519 identities for
         indexed_routers = []
-        routers_needing_fetch = []
+        missing_count = 0
         
         for router in hsdir_router_list:
-            ed25519_key = router.ed25519_identity_if_cached
+            ed25519_key = ed25519_mapping.get(router.fingerprint)
             if ed25519_key:
-                hs_index = compute_node_index(router, ed25519_key)
+                hs_index = compute_node_index(ed25519_key)
                 indexed_routers.append((hs_index, router))
             else:
-                routers_needing_fetch.append(router)
-        
-        logger.info("Found %d HSDirs with cached descriptors, %d need fetching",
-                   len(indexed_routers), len(routers_needing_fetch))
+                missing_count += 1
 
-        # Phase 2: If we don't have enough, fetch more descriptors in parallel
-        if len(indexed_routers) < min_hsdirs and routers_needing_fetch:
-            # Randomly sample routers to fetch (for fairness and to avoid always hitting the same ones)
-            to_fetch = routers_needing_fetch[:max_fetch]
-            if len(routers_needing_fetch) > max_fetch:
-                random.shuffle(routers_needing_fetch)
-                to_fetch = routers_needing_fetch[:max_fetch]
-            
-            logger.info("Fetching %d additional HSDir descriptors...", len(to_fetch))
-            
-            def fetch_one(router):
-                try:
-                    ed25519_key = router.ed25519_identity  # This triggers fetch
-                    if ed25519_key:
-                        return (compute_node_index(router, ed25519_key), router)
-                except Exception as e:
-                    logger.debug("Failed to get descriptor for %s: %s", router, e)
-                return None
-            
-            with ThreadPoolExecutor(max_workers=20) as executor:
-                futures = [executor.submit(fetch_one, r) for r in to_fetch]
-                for i, future in enumerate(as_completed(futures)):
-                    result = future.result()
-                    if result:
-                        indexed_routers.append(result)
-                    # Log progress
-                    if (i + 1) % 20 == 0:
-                        logger.info("Fetched %d/%d descriptors (%d usable)", 
-                                   i + 1, len(to_fetch), len(indexed_routers))
-                    # Early exit if we have enough
-                    if len(indexed_routers) >= min_hsdirs:
-                        logger.info("Reached minimum (%d HSDirs), proceeding...", min_hsdirs)
-                        break
+        logger.info("Indexed %d HSDirs (missing Ed25519 for %d)", 
+                   len(indexed_routers), missing_count)
 
         if not indexed_routers:
             logger.error("No HSDirs with Ed25519 identity found!")
             return
 
-        logger.info("Using %d HSDirs for selection", len(indexed_routers))
-
-        # Sort by hs_index
+        # Sort by hs_index for DHT-style lookup
         indexed_routers.sort(key=lambda x: x[0])
 
-        # For each replica, find responsible HSDirs
+        # For each replica, find responsible HSDirs using binary search
         for replica in range(2):
             service_index = service_indices[replica]
 
-            # Find the position in the ring where this index falls
-            pos = 0
-            for i, (hs_index, _) in enumerate(indexed_routers):
-                if hs_index >= service_index:
-                    pos = i
-                    break
-            else:
-                # Wrap around to the beginning
+            # Binary search to find insertion point
+            # We want the first router whose hs_index >= service_index
+            lo, hi = 0, len(indexed_routers)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if indexed_routers[mid][0] < service_index:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            pos = lo
+            
+            # If pos is at the end, wrap around to beginning
+            if pos >= len(indexed_routers):
                 pos = 0
+
+            logger.debug("Replica %d: service_index=%s, starting at pos=%d", 
+                        replica, service_index.hex()[:16], pos)
 
             # Yield 'spread' HSDirs starting from this position
             for j in range(spread):
                 idx = (pos + j) % len(indexed_routers)
-                _, router = indexed_routers[idx]
+                hs_index, router = indexed_routers[idx]
+                logger.debug("  HSDir %d: %s (index=%s)", j, router.nickname, hs_index.hex()[:16])
                 yield router, replica
+

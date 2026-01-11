@@ -82,6 +82,75 @@ ntor-onion-key (?P<ntor_key>[^\n]+)""",
             raise Exception("Can't parse router descriptor")
 
 
+class BulkDescriptorParser:
+    """Parser for extracting fingerprints and Ed25519 identities from bulk descriptor downloads."""
+    
+    # Match fingerprint line (hex, 40 chars with spaces)
+    fingerprint_regex = re.compile(r'^fingerprint\s+([0-9A-F\s]+)', re.MULTILINE | re.IGNORECASE)
+    
+    # Match master-key-ed25519 (base64-encoded 32-byte key)
+    master_key_regex = re.compile(r'^master-key-ed25519\s+([A-Za-z0-9+/]+)', re.MULTILINE)
+    
+    @staticmethod
+    def parse_ed25519_mapping(data):
+        """
+        Parse bulk descriptors and extract (fingerprint_bytes, ed25519_identity) pairs.
+        
+        Args:
+            data: String containing multiple concatenated router descriptors
+            
+        Returns:
+            Dict mapping fingerprint (bytes, 20 bytes) to ed25519_identity (bytes, 32 bytes)
+        """
+        mapping = {}
+        
+        # Split by "router " keyword to get individual descriptors
+        descriptors = data.split('\nrouter ')
+        
+        for i, desc in enumerate(descriptors):
+            if not desc.strip():
+                continue
+            
+            # Add back "router " prefix except for first fragment
+            if i > 0:
+                desc = 'router ' + desc
+            
+            # Extract fingerprint (hex with spaces -> bytes)
+            fp_match = BulkDescriptorParser.fingerprint_regex.search(desc)
+            if not fp_match:
+                continue
+            
+            # Remove spaces and convert hex to bytes
+            fp_hex = fp_match.group(1).replace(' ', '')
+            try:
+                fp_bytes = bytes.fromhex(fp_hex)
+            except ValueError:
+                continue
+            
+            if len(fp_bytes) != 20:
+                continue
+            
+            # Extract Ed25519 master key
+            mk_match = BulkDescriptorParser.master_key_regex.search(desc)
+            if not mk_match:
+                continue
+            
+            # Add padding if needed (Tor strips trailing =)
+            key_b64 = mk_match.group(1)
+            padding = 4 - (len(key_b64) % 4)
+            if padding != 4:
+                key_b64 += '=' * padding
+            
+            try:
+                ed25519_key = b64decode(key_b64)
+                if len(ed25519_key) == 32:
+                    mapping[fp_bytes] = ed25519_key
+            except Exception:
+                continue
+        
+        return mapping
+
+
 class IntroPointParser:
     regex = re.compile(
         r"""\
