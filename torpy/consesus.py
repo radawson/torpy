@@ -403,6 +403,8 @@ class TorConsensus:
 
         # tor ref: directory_get_from_dirserver DIR_PURPOSE_FETCH_CONSENSUS
         # tor ref: directory_send_command
+        # Create 1-hop circuit (guard only, no middle/exit) for directory operations
+        # The parameter "0" means 0 additional hops beyond the guard
         guard = TorGuard(router, purpose=purpose)
         return guard, guard.create_circuit(0)
 

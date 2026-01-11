@@ -582,7 +582,11 @@ class TorCircuit:
 
     @check_connected
     def build_hops(self, hops_count):
-        logger.info('Building %i hops circuit...', hops_count)
+        if hops_count == 0:
+            logger.info('Using 1-hop circuit (guard only) for directory operations')
+        else:
+            logger.info('Building %i-hop circuit...', hops_count + 1)  # +1 because guard is hop 1
+        
         while self.nodes_count < hops_count:
             if self.nodes_count == hops_count - 1:
                 router = self._guard.consensus.get_random_exit_node()
@@ -590,7 +594,9 @@ class TorCircuit:
                 router = self._guard.consensus.get_random_middle_node()
 
             self.extend(router)
-        logger.debug('Circuit has been built')
+        
+        if hops_count > 0:
+            logger.debug('Circuit has been built with %i total hops', hops_count + 1)
 
     @check_connected
     def create_stream(self, address=None):
