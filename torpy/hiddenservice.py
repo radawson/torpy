@@ -314,11 +314,15 @@ class HiddenServiceConnector:
             
             # Get v3 responsible HSDirs (yields router, replica tuples)
             # The generator handles 2 replicas internally, each with 4 HSDirs
+            hsdir_count = 0
             for responsible_router, replica in self._consensus.get_responsibles_v3(
                 blinded_pubkey,
                 time_period_num,
                 spread=4
             ):
+                logger.info('Trying HSDir %d: %s (replica %d)', 
+                           hsdir_count, responsible_router.nickname, replica)
+                hsdir_count += 1
                 yield ResponsibleDir(responsible_router, replica, self._circuit, self._consensus)
         else:
             # V2 hidden service - use v2 HSDir selection

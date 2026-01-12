@@ -365,6 +365,74 @@ class TorConsensus:
         flags = [RouterFlags.HSDir, RouterFlags.V2Dir]
         return self.get_routers(flags, has_dir_port=False)
 
+    def should_use_previous_srv(self) -> bool:
+        """
+        Determine which SRV to use based on position in the daily cycle.
+        
+        Per rend-spec section "Client behavior for fetching descriptors":
+        - If between new SRV (00:00 UTC) and new TP (12:00 UTC): use PREVIOUS SRV
+        - If between new TP (12:00 UTC) and new SRV (00:00 UTC): use CURRENT SRV
+        
+        The spec states:
+        "if a client is in the time segment between a new time period and a new SRV
+        (i.e. the segments drawn with '-') it uses the current SRV, else if the 
+        client is in a time segment between a new SRV and a new time period 
+        (i.e. the segments drawn with '='), it uses the previous SRV."
+        
+        Diagram from spec:
+        +------------------------------------------------------------------+
+        | 00:00      12:00       00:00       12:00       00:00       12:00 |
+        | SRV#1      TP#1        SRV#2       TP#2        SRV#3       TP#3  |
+        |  $==========|-----------$===========|-----------$===========|    |
+        +------------------------------------------------------------------+
+        
+        Returns:
+            True if previous SRV should be used (00:00-12:00 UTC)
+            False if current SRV should be used (12:00-00:00 UTC)
+        """
+        doc = self.get_document()
+        if doc is None:
+            logger.debug('No consensus document, defaulting to current SRV')
+            return False
+        
+        # Use consensus valid_after time, not system time (per spec)
+        valid_after = doc.valid_after
+        if valid_after is None:
+            logger.debug('No valid_after in consensus, defaulting to current SRV')
+            return False
+        
+        hour = valid_after.hour
+        use_previous = hour < 12
+        
+        logger.debug('Consensus valid_after hour=%d, use_previous_srv=%s', 
+                    hour, use_previous)
+        return use_previous
+
+    def get_shared_random_value_for_hsdir(self) -> bytes:
+        """
+        Get the correct SRV for HSDir operations based on current time.
+        
+        This implements the spec-compliant SRV selection logic for clients
+        fetching hidden service descriptors.
+        
+        Returns:
+            32-byte shared random value, or None if not available
+        """
+        use_previous = self.should_use_previous_srv()
+        srv = self.get_shared_random_value(use_previous=use_previous)
+        
+        if srv:
+            srv_type = "PREVIOUS" if use_previous else "CURRENT"
+            logger.info("Using %s SRV for HSDir: %s...", srv_type, srv.hex()[:16])
+        else:
+            # Try the other SRV as fallback
+            srv = self.get_shared_random_value(use_previous=not use_previous)
+            if srv:
+                srv_type = "CURRENT" if use_previous else "PREVIOUS"
+                logger.warning("Falling back to %s SRV: %s...", srv_type, srv.hex()[:16])
+        
+        return srv
+
     def get_shared_random_value(self, use_previous=False):
         """
         Extract the Shared Random Value (SRV) from the consensus.
@@ -602,16 +670,12 @@ class TorConsensus:
         # "period_length is the length of the time period in minutes"
         TIME_PERIOD_LENGTH = 1440  # 24 hours in MINUTES (not seconds!)
 
-        # Use SRV from consensus if not provided
+        # Use spec-compliant SRV selection if not provided
+        # Per rend-spec "Client behavior for fetching descriptors":
+        # - 00:00-12:00 UTC: use PREVIOUS SRV
+        # - 12:00-00:00 UTC: use CURRENT SRV
         if shared_random_value is None:
-            shared_random_value = self.get_shared_random_value()
-            if shared_random_value:
-                logger.info("Using CURRENT SRV: %s", shared_random_value.hex()[:16] + "...")
-            else:
-                # Fallback to previous value
-                shared_random_value = self.get_shared_random_value(use_previous=True)
-                if shared_random_value:
-                    logger.info("Using PREVIOUS SRV: %s", shared_random_value.hex()[:16] + "...")
+            shared_random_value = self.get_shared_random_value_for_hsdir()
             if shared_random_value is None:
                 # Last resort fallback - use deterministic placeholder
                 logger.warning('No SRV in consensus, using placeholder')

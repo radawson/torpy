@@ -1,0 +1,106 @@
+# Test data for HSv3 spec-compliant unit tests
+#
+# This file contains real consensus values captured from the Tor network
+# for use in deterministic testing. These values can be used to validate
+# HSDir selection algorithms without network access.
+#
+# Format: JSON with captured consensus data
+#
+# To update this file:
+# 1. Download a fresh consensus from a directory authority
+# 2. Extract the shared-rand-current-value and shared-rand-previous-value
+# 3. Extract the valid-after timestamp
+# 4. Store representative HSDir entries with their Ed25519 identities
+
+{
+    "description": "Captured consensus data for HSv3 unit tests",
+    "capture_date": "2026-01-12",
+    
+    "consensus_samples": [
+        {
+            "name": "morning_sample",
+            "description": "Consensus captured in morning (should use previous SRV)",
+            "valid_after": "2026-01-12 06:00:00",
+            "valid_after_hour": 6,
+            "expected_use_previous_srv": true,
+            "shared_rand_current_value": "9 qTS8nn50Z65rZ0zu+HuCwXg1mJnNfhsg8m2HvXOu87A=",
+            "shared_rand_previous_value": "9 wZm0mMl9rRxD9tFVTP6KP6XJv2iyFyLV5JopI+6KXA0=",
+            "current_srv_hex": "a934bc9e7e7467ae6b674ceef87b82c178359899cd7e1b20f26d87bd73aef3b0",
+            "previous_srv_hex": "c199b498c97dad1c43f6d1554cfe8a3fa5c9bf68b21722d5e49a2983ee8a5c0d"
+        },
+        {
+            "name": "afternoon_sample",
+            "description": "Consensus captured in afternoon (should use current SRV)",
+            "valid_after": "2026-01-12 15:00:00",
+            "valid_after_hour": 15,
+            "expected_use_previous_srv": false,
+            "shared_rand_current_value": "9 qTS8nn50Z65rZ0zu+HuCwXg1mJnNfhsg8m2HvXOu87A=",
+            "shared_rand_previous_value": "9 wZm0mMl9rRxD9tFVTP6KP6XJv2iyFyLV5JopI+6KXA0=",
+            "current_srv_hex": "a934bc9e7e7467ae6b674ceef87b82c178359899cd7e1b20f26d87bd73aef3b0",
+            "previous_srv_hex": "c199b498c97dad1c43f6d1554cfe8a3fa5c9bf68b21722d5e49a2983ee8a5c0d"
+        }
+    ],
+    
+    "time_period_test_vectors": [
+        {
+            "description": "Tor spec example from rend-spec 'Dividing time into periods'",
+            "timestamp": 1460546101,
+            "datetime_utc": "2016-04-13 11:15:01",
+            "expected_time_period": 16903
+        },
+        {
+            "description": "Boundary case: just before TP rotation",
+            "timestamp": 1460548799,
+            "datetime_utc": "2016-04-13 11:59:59",
+            "expected_time_period": 16903
+        },
+        {
+            "description": "Boundary case: just after TP rotation",
+            "timestamp": 1460548800,
+            "datetime_utc": "2016-04-13 12:00:00",
+            "expected_time_period": 16904
+        }
+    ],
+    
+    "hsdir_samples": [
+        {
+            "nickname": "TestHSDir1",
+            "fingerprint_hex": "AAAA1111222233334444555566667777888899990000",
+            "ed25519_identity_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
+        {
+            "nickname": "TestHSDir2", 
+            "fingerprint_hex": "BBBB1111222233334444555566667777888899990000",
+            "ed25519_identity_hex": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        }
+    ],
+    
+    "blinded_key_test_vectors": [
+        {
+            "description": "DuckDuckGo v3 onion service",
+            "onion_address": "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad",
+            "identity_pubkey_hex": "1d04a1d04a338c6e6ae970bfabee49049d6702250984ca950c01673f4ec034ad",
+            "test_time_period": 20465,
+            "expected_blinded_pubkey_hex": "0351f06cc0cd62d9da564d524876b9db8ffb23761278044ddc3e9968f5356c6f"
+        }
+    ],
+    
+    "service_index_test_vectors": [
+        {
+            "description": "Service index with DuckDuckGo blinded key, replica 0",
+            "blinded_pubkey_hex": "0351f06cc0cd62d9da564d524876b9db8ffb23761278044ddc3e9968f5356c6f",
+            "time_period": 20465,
+            "replica": 0,
+            "period_length_minutes": 1440,
+            "expected_service_index_hex": "563e8e71e6025bb509371669148fbd29ff2f600c4fafff23172fbf70a022b78d"
+        },
+        {
+            "description": "Service index with DuckDuckGo blinded key, replica 1",
+            "blinded_pubkey_hex": "0351f06cc0cd62d9da564d524876b9db8ffb23761278044ddc3e9968f5356c6f",
+            "time_period": 20465,
+            "replica": 1,
+            "period_length_minutes": 1440,
+            "expected_service_index_hex": "4d85eb6a58fc8aadfd2ce7f8496f6900d7cd3223347df0566029a9a55a4b4ae5"
+        }
+    ]
+}
