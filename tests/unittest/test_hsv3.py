@@ -138,14 +138,16 @@ class TestBlindedKeyDerivation:
 
     def test_blinded_key_length(self):
         """Test that blinded keys are 32 bytes."""
-        pubkey = b'\x01' * 32
+        # Use DuckDuckGo's real identity key (a valid Ed25519 point)
+        pubkey = bytes.fromhex("1d04a1d04a338c6e6ae970bfabee49049d6702250984ca950c01673f4ec034ad")
         tp = get_time_period_num()
         blinded = derive_blinded_pubkey(pubkey, tp)
         assert len(blinded) == 32
 
     def test_blinded_key_deterministic(self):
         """Test that blinded key derivation is deterministic."""
-        pubkey = b'\x02' * 32
+        # Use DuckDuckGo's real identity key (a valid Ed25519 point)
+        pubkey = bytes.fromhex("1d04a1d04a338c6e6ae970bfabee49049d6702250984ca950c01673f4ec034ad")
         tp = get_time_period_num()
         
         blinded1 = derive_blinded_pubkey(pubkey, tp)
@@ -154,7 +156,8 @@ class TestBlindedKeyDerivation:
 
     def test_blinded_key_different_periods(self):
         """Test that blinded keys differ for different time periods."""
-        pubkey = b'\x03' * 32
+        # Use DuckDuckGo's real identity key (a valid Ed25519 point)
+        pubkey = bytes.fromhex("1d04a1d04a338c6e6ae970bfabee49049d6702250984ca950c01673f4ec034ad")
         tp = get_time_period_num()
         
         blinded1 = derive_blinded_pubkey(pubkey, tp)
