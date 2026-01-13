@@ -441,13 +441,15 @@ class ResponsibleDir:
             with directory_circuit.create_dir_client() as dir_client:
                 if is_v3:
                     # V3 descriptor fetch
-                    # Path format: /tor/hs/3/<hsdir_index>
+                    # Path format: /tor/hs/3/<z> where z is base64 of blinded pubkey
+                    # Per rend-spec-v3 section 2.2.6
                     if blinded_pubkey is None:
                         raise ValueError('V3 descriptor fetch requires blinded_pubkey')
                     
-                    # The hsdir_index is the first 8 bytes of blinded_pubkey in base64
+                    # Tor uses standard base64 WITHOUT padding (NOT URL-safe base64!)
+                    # See ed25519_public_to_base64() -> digest256_to_base64() -> base64_encode_nopad()
                     from base64 import b64encode
-                    hsdir_index = b64encode(blinded_pubkey).decode().replace('=', '').replace('+', '-').replace('/', '_')
+                    hsdir_index = b64encode(blinded_pubkey).decode().rstrip('=')
                     descriptor_path = f'/tor/hs/3/{hsdir_index}'
                     logger.debug('Fetching v3 descriptor: %s', descriptor_path)
                 else:
@@ -484,25 +486,35 @@ class ResponsibleDir:
         """
         # Parse and decrypt v3 descriptor
         time_period_num = get_time_period_num()
+        identity_pubkey = hidden_service.identity_pubkey
+        blinded_pubkey = hidden_service.get_blinded_pubkey(time_period_num)
         subcredential = hidden_service.get_subcredential(time_period_num)
         
         try:
-            v3_descriptor = V3HSDescriptor(response)
-            decrypted = decrypt_v3_descriptor(
-                v3_descriptor,
+            # decrypt_v3_descriptor parses outer, decrypts first layer, decrypts inner layer
+            # Returns V3HSDescriptor with introduction_points populated
+            v3_descriptor = decrypt_v3_descriptor(
+                response,
+                identity_pubkey,
+                blinded_pubkey,
                 subcredential,
-                x25519_client_key=hidden_service._client_auth_key
+                client_key=hidden_service._client_auth_key
             )
             
-            # Parse introduction points from decrypted descriptor
-            intro_points_data = decrypted.get('introduction-point', [])
+            if v3_descriptor is None:
+                logger.warning('Failed to decrypt v3 descriptor')
+                return
+            
+            # Get introduction points from the decrypted descriptor
+            intro_points_data = v3_descriptor.introduction_points
             if not intro_points_data:
                 logger.warning('No introduction points found in v3 descriptor')
                 return
             
             for intro_point_raw in intro_points_data:
                 # Parse link specifiers to find router
-                link_specifiers = parse_link_specifiers(intro_point_raw.get('link-specifiers', b''))
+                raw_link_specs = intro_point_raw.get('link_specifiers_raw', b'')
+                link_specifiers = parse_link_specifiers(raw_link_specs) if raw_link_specs else []
                 
                 # Try to find router by fingerprint or ed25519 id
                 router = None
@@ -511,8 +523,9 @@ class ResponsibleDir:
                         # We have IP and port, try to find in consensus
                         continue
                     elif link_spec['type'] == 2:  # Legacy identity (RSA)
-                        fingerprint = link_spec['data'].hex().upper()
-                        router = self._consensus.get_router(fingerprint)
+                        # link_spec['data'] is raw 20-byte fingerprint
+                        fingerprint_bytes = link_spec['data']
+                        router = self._consensus.get_router_by_fingerprint(fingerprint_bytes)
                         if router:
                             break
                     elif link_spec['type'] == 3:  # Ed25519 identity
@@ -525,9 +538,9 @@ class ResponsibleDir:
                     continue
                 
                 # Store v3-specific data on the router
-                router.intro_auth_key = intro_point_raw.get('auth-key')
-                router.enc_key = intro_point_raw.get('enc-key')
-                router.enc_key_cert = intro_point_raw.get('enc-key-cert')
+                router.intro_auth_key = intro_point_raw.get('auth_key')
+                router.enc_key = intro_point_raw.get('enc_key')
+                router.enc_key_cert = intro_point_raw.get('enc_key_cert')
                 
                 yield IntroductionPointV3(router, self._circuit, intro_point_raw)
                 

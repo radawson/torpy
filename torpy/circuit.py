@@ -674,8 +674,10 @@ class TorCircuit:
         introducee = rendezvous_circuit.last_node.router
         
         # Get introduction point keys from descriptor
-        intro_enc_key = intro_data.get('enc-key')
-        intro_auth_key = intro_data.get('auth-key')
+        # enc_key is the curve25519 encryption key for ntor handshake
+        # auth_key is the Ed25519 auth key from the intro point certificate
+        intro_enc_key = intro_data.get('enc_key')
+        intro_auth_key = intro_data.get('auth_key')
         if not intro_enc_key or not intro_auth_key:
             raise ValueError('Missing encryption/auth keys in introduction point data')
         
@@ -687,6 +689,19 @@ class TorCircuit:
         hs_ntor = HSNtorHandshake(intro_enc_key, intro_auth_key, subcredential)
         client_ephemeral_pk = hs_ntor.client_pubkey
         
+        # Get the rendezvous point's ntor onion key
+        # This is the key the HS will use to extend to the rendezvous point
+        from torpy.crypto_common import sha3_256 as _sha3_256
+        try:
+            # The ntor key is on the descriptor
+            rend_ntor_key = introducee.descriptor.ntor_key
+        except (AttributeError, TypeError):
+            rend_ntor_key = None
+        
+        if rend_ntor_key is None:
+            logger.warning("Could not find rendezvous point ntor key")
+            raise ValueError("Rendezvous point missing ntor onion key")
+        
         # Build the plaintext INTRODUCE1 payload
         # Per rend-spec-v3 section 3.2.1:
         # RENDEZVOUS_COOKIE     [20 bytes]
@@ -694,7 +709,7 @@ class TorCircuit:
         # EXTENSIONS            [N_EXTENSIONS times]
         # ONION_KEY_TYPE        [1 byte] (ntor = 1)
         # ONION_KEY_LEN         [2 bytes]
-        # ONION_KEY             [ONION_KEY_LEN bytes]
+        # ONION_KEY             [ONION_KEY_LEN bytes] -- rendezvous point's ntor key
         # LINK_SPECIFIERS_NUM   [1 byte]
         # LINK_SPECIFIERS       [variable]
         
@@ -702,30 +717,60 @@ class TorCircuit:
         plaintext += rendezvous_cookie  # 20 bytes
         plaintext += struct.pack('!B', 0)  # No extensions
         plaintext += struct.pack('!B', 1)  # ONION_KEY_TYPE: ntor
-        plaintext += struct.pack('!H', len(client_ephemeral_pk))  # ONION_KEY_LEN
-        plaintext += client_ephemeral_pk  # Client's ephemeral x25519 public key
+        plaintext += struct.pack('!H', len(rend_ntor_key))  # ONION_KEY_LEN
+        plaintext += rend_ntor_key  # Rendezvous point's ntor onion key
         
         # Add link specifiers for rendezvous point
-        # We need at least the fingerprint
-        link_spec = b''
-        # Type 2: Legacy ID (RSA fingerprint)
+        # The hidden service needs to know how to connect to the rendezvous point
+        # Per rend-spec-v3: NSPEC times (LSTYPE [1 byte] | LSLEN [1 byte] | LSPEC [variable])
+        link_specs = []
+        
+        # Type 0: IPv4 address (4 bytes) + port (2 bytes) = 6 bytes
+        import socket as _socket
+        ip_parts = [int(p) for p in introducee.ip.split('.')]
+        ip_bytes = bytes(ip_parts)
+        # Use OR port - this is where the HS will connect via Tor
+        port_bytes = struct.pack('!H', introducee.or_port)
+        link_specs.append(struct.pack('!BB', 0, 6) + ip_bytes + port_bytes)
+        
+        # Type 2: Legacy ID (RSA fingerprint) - 20 bytes
         fingerprint = bytes.fromhex(introducee.fingerprint) if isinstance(introducee.fingerprint, str) else introducee.fingerprint
-        link_spec += struct.pack('!BB', 2, 20)  # Type, Length
-        link_spec += fingerprint[:20]
+        link_specs.append(struct.pack('!BB', 2, 20) + fingerprint[:20])
         
-        plaintext += struct.pack('!B', 1)  # Number of link specifiers
-        plaintext += link_spec
+        # Combine link specifiers
+        plaintext += struct.pack('!B', len(link_specs))  # Number of link specifiers
+        plaintext += b''.join(link_specs)
         
-        # Encrypt the plaintext
+        # Encrypt using hs-ntor
+        # Per hs-ntor spec, the ENCRYPTED section is:
+        # CLIENT_PK [32 bytes] | ENCRYPTED_DATA [variable] | MAC [32 bytes]
         enc_key, mac_key = hs_ntor.create_onion_key()
-        encryptor = aes_ctr_encryptor(enc_key, b'\x00' * 16)  # IV is all zeros for HS
-        encrypted_data = encryptor.update(plaintext)
+        encryptor = aes_ctr_encryptor(enc_key, b'\x00' * 16)  # IV is all zeros
+        ciphertext = encryptor.update(plaintext)
+        
+        # Build the encrypted section: CLIENT_PK | ENCRYPTED_DATA | MAC
+        encrypted_section = client_ephemeral_pk + ciphertext
+        
+        # Compute MAC over: AUTH_KEY_TYPE | AUTH_KEY_LEN | AUTH_KEY | N_EXTENSIONS | CLIENT_PK | ENCRYPTED_DATA
+        # The MAC covers from AUTH_KEY through end of encrypted data
+        mac_data = (
+            struct.pack('!BH', 2, len(intro_auth_key)) +  # AUTH_KEY_TYPE (ed25519) + AUTH_KEY_LEN
+            intro_auth_key +
+            struct.pack('!B', 0) +  # N_EXTENSIONS (0)
+            encrypted_section  # CLIENT_PK + ENCRYPTED_DATA
+        )
+        from torpy.crypto_common import hmac as _hmac
+        mac = _hmac(mac_key, mac_data)
+        
+        # Final encrypted data = CLIENT_PK | ENCRYPTED_DATA | MAC
+        encrypted_data = encrypted_section + mac
         
         # Create v3 Introduce1 cell
         from torpy.cells import CellRelayIntroduce1V3
         
-        # Legacy key ID is the intro point's RSA fingerprint
-        legacy_key_id = bytes.fromhex(introduction_point.fingerprint)[:20] if isinstance(introduction_point.fingerprint, str) else introduction_point.fingerprint[:20]
+        # Per rend-spec-v3: For v3 services, LEGACY_KEY_ID must be 20 zero bytes
+        # This distinguishes v3 INTRODUCE1 from legacy v2 messages
+        legacy_key_id = b'\x00' * 20
         
         inner_cell = CellRelayIntroduce1V3(
             legacy_key_id=legacy_key_id,
@@ -748,7 +793,7 @@ class TorCircuit:
             def handshake(self):
                 return self._public_key
             
-            def complete(self, handshake_response):
+            def complete_handshake(self, handshake_response):
                 # Complete the HS-ntor handshake with the response from Rendezvous2
                 # Extract server pubkey from response and call complete_handshake
                 server_pubkey = handshake_response[:32]  # First 32 bytes is Y

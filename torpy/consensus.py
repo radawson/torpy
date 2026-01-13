@@ -315,6 +315,24 @@ class TorConsensus:
         fingerprint_b = b32decode(fingerprint.upper())
         return next(onion_router for onion_router in self.document.routers if onion_router.fingerprint == fingerprint_b)
 
+    def get_router_by_fingerprint(self, fingerprint_bytes: bytes) -> 'Router':
+        """
+        Look up a router by its raw fingerprint bytes.
+        
+        Args:
+            fingerprint_bytes: Raw 20-byte RSA fingerprint (SHA-1 of identity key)
+            
+        Returns:
+            Router matching the fingerprint
+            
+        Raises:
+            StopIteration if router not found
+        """
+        return next(
+            (router for router in self.document.routers if router.fingerprint == fingerprint_bytes),
+            None
+        )
+
     def get_routers(self, flags=None, has_dir_port=True, with_renew=True):
         """
         Select consensus routers that satisfy certain parameters.

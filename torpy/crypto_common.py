@@ -49,6 +49,28 @@ def sha3_256(msg):
     return sha.finalize()
 
 
+def shake256(msg, length):
+    """
+    SHAKE-256 extendable output function (XOF).
+    
+    Per rend-spec-v3, descriptor keys are derived using SHAKE-256 (crypto_xof).
+    
+    Args:
+        msg: Input data to hash
+        length: Number of output bytes to generate
+        
+    Returns:
+        bytes: length bytes of SHAKE-256 output
+    """
+    from cryptography.hazmat.primitives.hashes import SHAKE256
+    from cryptography.hazmat.primitives import hashes as crypto_hashes
+    
+    # Use SHAKE256 XOF
+    digest = crypto_hashes.Hash(SHAKE256(length), backend=bend)
+    digest.update(msg)
+    return digest.finalize()
+
+
 def hash_stream(name):
     return hashlib.new(name)
 
