@@ -247,12 +247,13 @@ class HiddenService:
         from torpy.crypto_common import sha3_256
         import struct
         
-        TIME_PERIOD_LENGTH = 1440 * 60
+        # Per rend-spec-v3 section 2.2.3, period_length is in MINUTES (1440), not seconds
+        TIME_PERIOD_LENGTH_MINUTES = 1440
         desc_id_input = (
             b"store-at-idx" +
             blinded_pubkey +
             struct.pack(">Q", replica) +
-            struct.pack(">Q", TIME_PERIOD_LENGTH) +
+            struct.pack(">Q", TIME_PERIOD_LENGTH_MINUTES) +
             struct.pack(">Q", time_period_num)
         )
         

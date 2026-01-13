@@ -290,11 +290,13 @@ def get_hs_desc_index(blinded_pubkey: bytes, time_period_num: int,
         bytes: 32-byte index value
     """
     # Build the index input
+    # Per rend-spec-v3 section 2.2.3, period_length is in MINUTES (1440), not seconds
+    TIME_PERIOD_LENGTH_MINUTES = 1440
     index_input = (
         b"store-at-idx" +
         blinded_pubkey +
         struct.pack(">Q", replica) +
-        struct.pack(">Q", TIME_PERIOD_LENGTH) +
+        struct.pack(">Q", TIME_PERIOD_LENGTH_MINUTES) +
         struct.pack(">Q", time_period_num)
     )
     
