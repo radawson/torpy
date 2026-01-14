@@ -94,7 +94,15 @@ class CircuitNode:
 
     def complete_handshake(self, handshake_response):
         shared_secret = self.key_agreement.complete_handshake(handshake_response)
-        self._crypto_state = CryptoState(shared_secret)
+        # Check if this is v3 HS (returns tuple of 4 keys) or v2/regular (returns bytes)
+        if isinstance(shared_secret, tuple) and len(shared_secret) == 4:
+            # v3 hidden service: use HSCryptoState with SHA3-256/AES-256
+            from torpy.crypto_state import HSCryptoState
+            df, db, kf, kb = shared_secret
+            self._crypto_state = HSCryptoState(df, db, kf, kb)
+        else:
+            # v2 or regular circuit: use standard CryptoState with SHA1/AES-128
+            self._crypto_state = CryptoState(shared_secret)
 
     def encrypt_forward(self, relay_cell):
         self._crypto_state.encrypt_forward(relay_cell)
@@ -785,6 +793,9 @@ class TorCircuit:
         # Create a CircuitNode with the HS-ntor handshake
         # We need a custom KeyAgreement class that wraps HS-ntor
         class HSNtorKeyAgreement(KeyAgreement):
+            """Key agreement wrapper for v3 HS-ntor handshake."""
+            TYPE = 3  # Custom type for HS-ntor
+            
             def __init__(self, hs_ntor_handshake):
                 self._hs_ntor = hs_ntor_handshake
                 self._public_key = client_ephemeral_pk
@@ -796,10 +807,11 @@ class TorCircuit:
             def complete_handshake(self, handshake_response):
                 # Complete the HS-ntor handshake with the response from Rendezvous2
                 # Extract server pubkey from response and call complete_handshake
+                # Format: SERVER_PK (Y) [32 bytes] | AUTH_INPUT_MAC [32 bytes]
                 server_pubkey = handshake_response[:32]  # First 32 bytes is Y
-                auth_input = handshake_response[32:]  # Rest is MAC
-                forward_key, backward_key = self._hs_ntor.complete_handshake(server_pubkey, auth_input)
-                return (forward_key, backward_key)
+                auth_input_mac = handshake_response[32:64]  # Next 32 bytes is AUTH_INPUT_MAC
+                # Returns tuple of (df, db, kf, kb) for v3 HS crypto
+                return self._hs_ntor.complete_handshake(server_pubkey, auth_input_mac)
         
         # Create node with HS-ntor handshake
         extend_node = CircuitNode(introduction_point)

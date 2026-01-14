@@ -117,3 +117,102 @@ class CryptoState:
 
         # Still encrypted
         relay_cell.set_encrypted(payload)
+
+
+class HSCryptoState:
+    """
+    Crypto state for v3 hidden service circuits.
+    
+    Uses SHA3-256 for digests and AES-256 for encryption,
+    as specified in rend-spec-v3.
+    """
+    
+    def __init__(self, df, db, kf, kb):
+        """
+        Initialize v3 HS crypto state.
+        
+        Args:
+            df: 32-byte forward digest seed (SHA3-256)
+            db: 32-byte backward digest seed (SHA3-256)
+            kf: 32-byte forward key (AES-256)
+            kb: 32-byte backward key (AES-256)
+        """
+        import hashlib
+        from torpy.crypto_common import aes256_ctr_encryptor, aes256_ctr_decryptor
+        
+        # Initialize SHA3-256 running digests
+        self._forward_digest = hashlib.sha3_256(df)
+        self._backward_digest = hashlib.sha3_256(db)
+        
+        # Initialize AES-256 ciphers
+        self._forward_cipher = aes256_ctr_encryptor(kf)
+        self._backward_cipher = aes256_ctr_decryptor(kb)
+        
+        # Track the last received cell's digest for SENDME authentication
+        self._last_received_digest = b'\x00' * 32
+
+    def _digesting_func(self, payload):
+        # Clone the digest, update with payload, return first 4 bytes
+        digest_copy = self._forward_digest.copy()
+        self._forward_digest.update(payload)
+        updated = self._forward_digest.copy()
+        return updated.digest()[:4]
+
+    def _encrypting_func(self, payload):
+        return aes_update(self._forward_cipher, payload)
+
+    def _digest_check_func(self, payload, digest):
+        # Clone the backward digest to check
+        digest_clone = self._backward_digest.copy()
+        digest_clone.update(payload)
+        new_digest = digest_clone.digest()[:4]
+        
+        if new_digest != digest:
+            logger.debug(
+                'received cell digest not equal ({!r} != {!r}); payload = {!r}'.format(
+                    to_hex(new_digest), to_hex(digest), to_hex(payload)
+                )
+            )
+            return False
+        
+        # Update the actual backward digest
+        self._backward_digest.update(payload)
+        # Store the full 32-byte digest for SENDME authentication
+        self._last_received_digest = self._backward_digest.copy().digest()[:32]
+        return True
+    
+    def get_sendme_digest(self):
+        """Get the digest to include in authenticated SENDME cells."""
+        return self._last_received_digest
+
+    def _decrypting_func(self, payload):
+        return aes_update(self._backward_cipher, payload)
+
+    def encrypt_forward(self, relay_cell):
+        if not relay_cell.digest:
+            relay_cell.prepare(self._digesting_func)
+            logger.debug('Relay cell prepared: digest=%s, stream_id=%d, inner_cell=%s',
+                        to_hex(relay_cell.digest), relay_cell.stream_id,
+                        type(relay_cell._inner_cell).__name__)
+        relay_cell.encrypt(self._encrypting_func)
+        logger.debug('Relay cell encrypted: %d bytes', len(relay_cell._encrypted) if relay_cell._encrypted else 0)
+
+    def decrypt_backward(self, relay_cell):
+        # tor ref: relay_decrypt_cell
+        encrypted = relay_cell.get_encrypted()
+        payload = self._decrypting_func(encrypted)
+
+        # Check if cell is recognized
+        header = RelayedTorCell.parse_header(payload)
+        if header['is_recognized'] == 0:
+            payload_copy = RelayedTorCell.set_header_digest(payload, b'\0' * 4)
+
+            # tor ref: relay_digest_matches
+            if self._digest_check_func(payload_copy, header['digest']):
+                relay_cell.set_decrypted(**header)
+                return
+            # Treat as encrypted even if is_recognized flag is zero but digests are not equal:
+            # collisions are possible in the encrypted buffer
+
+        # Still encrypted
+        relay_cell.set_encrypted(payload)

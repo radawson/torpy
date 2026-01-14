@@ -227,6 +227,11 @@ def aes_ctr_decryptor(key, iv=b'\0' * 16):
     return Cipher(AES(key), CTR(iv), backend=bend).decryptor()
 
 
+# Aliases for AES-256 (32-byte key) - same function, key size determines algorithm
+aes256_ctr_encryptor = aes_ctr_encryptor
+aes256_ctr_decryptor = aes_ctr_decryptor
+
+
 def aes_update(aes_cipher, data):
     return aes_cipher.update(data)
 
