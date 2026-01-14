@@ -129,9 +129,10 @@ class TorGuard:
         stream_ids = []
         if hasattr(circuit, '_streams') and hasattr(circuit._streams, '_stream_map'):
             stream_ids = list(circuit._streams._stream_map.keys())
+        nodes = getattr(circuit, '_circuit_nodes', None)
+        node_count = len(nodes) if nodes else 0
         logger.warning('  Circuit state at destroy: %d nodes, streams=%s', 
-                      len(circuit._circuit_nodes) if hasattr(circuit, '_circuit_nodes') else 0,
-                      stream_ids)
+                      node_count, stream_ids)
         send_destroy = isinstance(cell, CellRelayTruncated)
         self.destroy_circuit(circuit, send_destroy=send_destroy)
 

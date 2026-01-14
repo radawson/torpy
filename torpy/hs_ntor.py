@@ -60,7 +60,8 @@ TIME_PERIOD_ROTATION_OFFSET = 12 * 60 * 60  # 12 hours
 HS_NTOR_PROTOID = b"tor-hs-ntor-curve25519-sha3-256-1"
 
 # Key expansion info strings
-HS_NTOR_KEY_EXPAND = HS_NTOR_PROTOID + b":hs_key_expand"
+HS_NTOR_KEY_EXTRACT = HS_NTOR_PROTOID + b":hs_key_extract"  # t_hsenc
+HS_NTOR_KEY_EXPAND = HS_NTOR_PROTOID + b":hs_key_expand"    # m_hsexpand
 HS_NTOR_MAC = HS_NTOR_PROTOID + b":hs_mac"
 HS_NTOR_VERIFY = HS_NTOR_PROTOID + b":hs_verify"
 
@@ -351,15 +352,21 @@ class HSNtorHandshake:
         """
         Create the onion key for INTRODUCE1 encryption.
         
+        Per rend-spec-v3 section 3.3.2:
+        intro_secret_hs_input = EXP(B,x) | AUTH_KEY | X | B | PROTOID
+        info = m_hsexpand | subcredential
+        hs_keys = SHAKE-256(intro_secret_hs_input | t_hsenc | info, S_KEY_LEN+MAC_LEN)
+        
         Returns:
-            Tuple of (onion_key, encrypted_data_key)
+            Tuple of (enc_key, mac_key) for INTRODUCE1 encryption
         """
         # EXP(B, x) where B is the intro enc key
         B = curve25519_public_from_bytes(self._intro_enc_key)
         shared = curve25519_get_shared(self._x, B)
         
-        # Derive keys
-        secret_input = (
+        # Build intro_secret_hs_input per spec:
+        # EXP(B,x) | AUTH_KEY | X | B | PROTOID
+        intro_secret_hs_input = (
             shared +
             self._intro_auth_key +
             curve25519_to_bytes(self._X) +
@@ -367,12 +374,14 @@ class HSNtorHandshake:
             HS_NTOR_PROTOID
         )
         
-        # Use HKDF to derive encryption keys
-        keys = hkdf_sha256(
-            sha3_256(secret_input),
-            length=64,
-            info=HS_NTOR_KEY_EXPAND
-        )
+        # info = m_hsexpand | subcredential
+        info = HS_NTOR_KEY_EXPAND + self._subcredential
+        
+        # Full KDF input: intro_secret_hs_input | t_hsenc | info
+        kdf_input = intro_secret_hs_input + HS_NTOR_KEY_EXTRACT + info
+        
+        # Use SHAKE-256 to derive keys (S_KEY_LEN=32 + MAC_KEY_LEN=32 = 64)
+        keys = hashlib.shake_256(kdf_input).digest(64)
         
         enc_key = keys[:32]
         mac_key = keys[32:64]
@@ -384,9 +393,17 @@ class HSNtorHandshake:
         """
         Complete the HS-ntor handshake after receiving RENDEZVOUS2.
         
+        Per rend-spec-v3 section 3.3.2:
+        rend_secret_hs_input = EXP(X,y) | EXP(X,b) | AUTH_KEY | B | X | Y | PROTOID
+        (from client perspective using our ephemeral key x):
+        rend_secret_hs_input = EXP(Y,x) | EXP(B,x) | AUTH_KEY | B | X | Y | PROTOID
+        
+        NTOR_KEY_SEED = SHAKE-256(rend_secret_hs_input | t_hsenc | m_hsexpand | subcred, 32)
+        Then use HKDF-SHA3-256 to expand NTOR_KEY_SEED for circuit keys.
+        
         Args:
             server_pubkey: Server's ephemeral x25519 public key (Y)
-            auth_input: Additional authentication input
+            auth_input: Additional authentication input (MAC for verification)
             
         Returns:
             Tuple of (forward_key, backward_key) for circuit encryption
@@ -395,11 +412,12 @@ class HSNtorHandshake:
         B = curve25519_public_from_bytes(self._intro_enc_key)
         
         # Calculate shared secrets
-        xy = curve25519_get_shared(self._x, Y)
-        xb = curve25519_get_shared(self._x, B)
+        xy = curve25519_get_shared(self._x, Y)  # EXP(Y,x)
+        xb = curve25519_get_shared(self._x, B)  # EXP(B,x)
         
-        # Build secret input
-        secret_input = (
+        # Build rend_secret_hs_input per spec:
+        # EXP(Y,x) | EXP(B,x) | AUTH_KEY | B | X | Y | PROTOID
+        rend_secret_hs_input = (
             xy +
             xb +
             self._intro_auth_key +
@@ -409,12 +427,15 @@ class HSNtorHandshake:
             HS_NTOR_PROTOID
         )
         
-        # Derive final keys
-        keys = hkdf_sha256(
-            sha3_256(secret_input),
-            length=64,
-            info=HS_NTOR_KEY_EXPAND
-        )
+        # info = m_hsexpand | subcredential
+        info = HS_NTOR_KEY_EXPAND + self._subcredential
+        
+        # Full KDF input: rend_secret_hs_input | t_hsenc | info
+        kdf_input = rend_secret_hs_input + HS_NTOR_KEY_EXTRACT + info
+        
+        # Derive NTOR_KEY_SEED using SHAKE-256
+        # For circuit keys we need forward and backward (each 32 bytes)
+        keys = hashlib.shake_256(kdf_input).digest(64)
         
         forward_key = keys[:32]
         backward_key = keys[32:64]
