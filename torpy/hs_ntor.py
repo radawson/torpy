@@ -33,6 +33,7 @@ from typing import Tuple, Optional
 
 from torpy.crypto_common import (
     sha3_256,
+    hs_mac,
     hkdf_sha256,
     curve25519_private,
     curve25519_get_shared,
@@ -389,24 +390,27 @@ class HSNtorHandshake:
         return enc_key, mac_key
     
     def complete_handshake(self, server_pubkey: bytes, 
-                           auth_input: bytes) -> Tuple[bytes, bytes]:
+                           auth_input_mac: bytes) -> Tuple[bytes, bytes]:
         """
         Complete the HS-ntor handshake after receiving RENDEZVOUS2.
         
-        Per rend-spec-v3 section 3.3.2:
-        rend_secret_hs_input = EXP(X,y) | EXP(X,b) | AUTH_KEY | B | X | Y | PROTOID
-        (from client perspective using our ephemeral key x):
+        Per rend-spec-v3:
         rend_secret_hs_input = EXP(Y,x) | EXP(B,x) | AUTH_KEY | B | X | Y | PROTOID
+        NTOR_KEY_SEED = MAC(rend_secret_hs_input, t_hsenc)
+        verify = MAC(rend_secret_hs_input, t_hsverify)
+        auth_input = verify | AUTH_KEY | B | Y | X | PROTOID | "Server"
+        AUTH_INPUT_MAC = MAC(auth_input, t_hsmac)
         
-        NTOR_KEY_SEED = SHAKE-256(rend_secret_hs_input | t_hsenc | m_hsexpand | subcred, 32)
-        Then use HKDF-SHA3-256 to expand NTOR_KEY_SEED for circuit keys.
+        The client verifies AUTH_INPUT_MAC and then derives circuit keys
+        from NTOR_KEY_SEED using the standard ntor key expansion.
         
         Args:
-            server_pubkey: Server's ephemeral x25519 public key (Y)
-            auth_input: Additional authentication input (MAC for verification)
+            server_pubkey: Server's ephemeral x25519 public key (Y) - 32 bytes
+            auth_input_mac: AUTH_INPUT_MAC from server for verification - 32 bytes
             
         Returns:
-            Tuple of (forward_key, backward_key) for circuit encryption
+            Tuple of (forward_digest, backward_digest, forward_key, backward_key)
+            for circuit encryption
         """
         Y = curve25519_public_from_bytes(server_pubkey)
         B = curve25519_public_from_bytes(self._intro_enc_key)
@@ -427,20 +431,51 @@ class HSNtorHandshake:
             HS_NTOR_PROTOID
         )
         
-        # info = m_hsexpand | subcredential
-        info = HS_NTOR_KEY_EXPAND + self._subcredential
+        # Derive NTOR_KEY_SEED using the spec's MAC function
+        # NTOR_KEY_SEED = MAC(rend_secret_hs_input, t_hsenc)
+        ntor_key_seed = hs_mac(rend_secret_hs_input, HS_NTOR_KEY_EXTRACT)
         
-        # Full KDF input: rend_secret_hs_input | t_hsenc | info
-        kdf_input = rend_secret_hs_input + HS_NTOR_KEY_EXTRACT + info
+        # Verify AUTH_INPUT_MAC
+        # verify = MAC(rend_secret_hs_input, t_hsverify)
+        verify = hs_mac(rend_secret_hs_input, HS_NTOR_VERIFY)
         
-        # Derive NTOR_KEY_SEED using SHAKE-256
-        # For circuit keys we need forward and backward (each 32 bytes)
-        keys = hashlib.shake_256(kdf_input).digest(64)
+        # auth_input = verify | AUTH_KEY | B | Y | X | PROTOID | "Server"
+        auth_input = (
+            verify +
+            self._intro_auth_key +
+            self._intro_enc_key +
+            server_pubkey +
+            curve25519_to_bytes(self._X) +
+            HS_NTOR_PROTOID +
+            b"Server"
+        )
         
-        forward_key = keys[:32]
-        backward_key = keys[32:64]
+        # Compute expected AUTH_INPUT_MAC
+        expected_auth_mac = hs_mac(auth_input, HS_NTOR_MAC)
         
-        return forward_key, backward_key
+        if auth_input_mac != expected_auth_mac:
+            logger.warning("HS-ntor AUTH_INPUT_MAC verification failed!")
+            logger.debug("Expected: %s", expected_auth_mac.hex())
+            logger.debug("Received: %s", auth_input_mac.hex())
+            raise ValueError("HS-ntor handshake authentication failed")
+        
+        logger.debug("HS-ntor AUTH_INPUT_MAC verified successfully")
+        
+        # Expand NTOR_KEY_SEED to get circuit keys
+        # Per spec, use HKDF-style expansion with m_hsexpand
+        # We need: Df (digest forward), Db (digest backward), Kf (key forward), Kb (key backward)
+        # Each 32 bytes = 128 bytes total
+        key_material = hashlib.shake_256(
+            ntor_key_seed + HS_NTOR_KEY_EXPAND
+        ).digest(128)
+        
+        # Per tor-spec ntor: Df, Db, Kf, Kb (each 32 bytes for SHA3-256/AES-256)
+        df = key_material[0:32]    # Forward digest seed
+        db = key_material[32:64]   # Backward digest seed  
+        kf = key_material[64:96]   # Forward key
+        kb = key_material[96:128]  # Backward key
+        
+        return (df, db, kf, kb)
 
 
 # =============================================================================

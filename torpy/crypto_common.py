@@ -49,6 +49,27 @@ def sha3_256(msg):
     return sha.finalize()
 
 
+def hs_mac(key, msg):
+    """
+    Hidden service MAC function per rend-spec-v3.
+    
+    Per spec: MAC(key=k, message=m) = SHA3_256(k_len | k | m)
+    where k_len is htonll(len(k)) (8-byte big-endian length of k).
+    
+    This is different from standard HMAC constructions.
+    
+    Args:
+        key: The MAC key
+        msg: The message to authenticate
+        
+    Returns:
+        bytes: 32-byte MAC value
+    """
+    import struct
+    k_len = struct.pack('>Q', len(key))  # 8-byte big-endian
+    return sha3_256(k_len + key + msg)
+
+
 def shake256(msg, length):
     """
     SHAKE-256 extendable output function (XOF).
